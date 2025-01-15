@@ -50,7 +50,7 @@ keep <- map(c(1:nrow(griddf)), \(i) getGoodExprGeneNames(griddf$organism[i],
 
 # filtering lowly expressed genes
 # our 46 TF deletions
-TFdel_lookup <- read_delim("data_files/downloaded_genomes_and_features/46TFdelLookup.csv", col_names = FALSE, col_select = c(1,2), delim = ";") # gets some warnings, but so far has been fine
+TFdel_lookup <- read_delim("data_files/downloaded_genomes_and_features/yeastract_46TFs.csv", col_names = FALSE, col_select = c(1,2), delim = ";") # gets some warnings, but so far has been fine
 colnames(TFdel_lookup) <- c("common", "systematic")
 
 length(keep) # number of genes we're keeping
@@ -343,6 +343,7 @@ load("data_files/Cleaned_Counts.RData")
 load("data_files/Cleaned_Counts_Allele.RData")
 ExperimentNames <- c("LowN", "CC", "HAP4", "LowPi", "Heat", "Cold")
 
+# parents
 # using info and collapsed counts from parents only, all WT samples, replicates averaged
 dim(info)
 dim(collapsed$cer)
@@ -381,7 +382,56 @@ dim(info)
 # saving
 save(counts_list, info, file = "data_files/Clustering_Counts.RData")
 
+# hybrids
+dim(info_allele)
+dim(collapsed_allele$cer)
+dim(collapsed_allele$par)
+sum(grepl("WT", info_allele$condition))/nrow(info_allele) # should have all WT, ratio is 1
+sum(grepl("WT", colnames(collapsed_allele$cer)))/ncol(collapsed_allele$cer) # should have all WT, ratio is 1
+table(colnames(collapsed_allele$cer)) |> table() # should all have one entry, 1 for each condition
+
+### Splitting counts into species/experiments
+counts_list <- vector(mode = "list", length = 0)
+for (e in unique(info_allele$experiment)) {
+  for (a in c("cer", "par")) {
+    cts <- collapsed_allele[[a]][, info_allele$experiment == e]
+    cts <- cts[apply(cts, 1, \(x) !all(is.na(x))),] # removing na genes from Heat/Cold
+    counts_list[[paste(a, e, sep = "_")]] <- cts
+  }
+}
+rm(cts)
+# removing genes that are lowly expressed in BOTH species
+expr_thresh <- 30
+for (e in ExperimentNames) {
+  cer_name <- paste("cer", e, sep = "_")
+  par_name <- paste("par", e, sep = "_")
+  low_cer <- rowMeans(counts_list[[cer_name]]) <= expr_thresh
+  low_par <- rowMeans(counts_list[[par_name]]) <= expr_thresh
+  good_idxs <- !(low_cer & low_par)
+  counts_list[[cer_name]] <- counts_list[[cer_name]][good_idxs,]
+  counts_list[[par_name]] <- counts_list[[par_name]][good_idxs,]
+}
+# now experiments have different nGenes (but alleles from the same experiment will have the same nGenes)
+dim(counts_list$cer_CC)
+dim(counts_list$par_CC)
+dim(counts_list$cer_Cold)
+dim(counts_list$par_Cold)
+dim(info_allele)
+# saving
+save(counts_list, info_allele, file = "data_files/Clustering_Counts_Allele.RData")
+
 #### Categorizing level and dynamics of all genes ####
+# colors used throughout paper
+levdyn_colordf <- tibble(type = c("salmon", "aquamarine", "gold", "greenyellow"),
+                         labels = c("conserved level \nand dynamics", 
+                                    "conserved level, \ndiverged dynamics", 
+                                    "diverged level, \nconserved dynamics", 
+                                    "diverged level \nand dynamics"),
+                         limits = c("conserved level and dynamics", 
+                                    "conserved level, diverged dynamics", 
+                                    "diverged level, conserved dynamics", 
+                                    "diverged level and dynamics"))
+
 # Running the following section requires running the clustering.R 
 # and single_gene_model_construction_and_QC>R scripts first
 load("data_files/CorrelationClustering3Disp.RData")
@@ -454,7 +504,7 @@ plotdf <- finaldf |>
 ggplot(plotdf, aes(x = effect_size_species)) +
   geom_density(aes(fill = bias), alpha = 0.5) 
 # pretty clear how allele mapping bias affects lfc
-# amending so that biased genes are not considered diverged in level
+### amending so that biased genes are not considered diverged in level
 finaldf$level <- if_else(finaldf$bias == "none",
                          true = finaldf$level,
                          false = "biased")
@@ -504,15 +554,6 @@ finaldf$group4 <- map2(finaldf$level, finaldf$dynamics, \(l, d) {
   }
 }) |> unlist()
 # bar plot
-levdyn_colordf <- tibble(type = c("grey", "greenyellow", "gold", "magenta"),
-                         labels = c("conserved level \nand dynamics", 
-                                    "conserved level, \ndiverged dynamics", 
-                                    "diverged level, \nconserved dynamics", 
-                                    "diverged level \nand dynamics"),
-                         limits = c("conserved level and dynamics", 
-                                    "conserved level, diverged dynamics", 
-                                    "diverged level, conserved dynamics", 
-                                    "diverged level and dynamics"))
 pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/bar.pdf",
     width = 3, height = 3)
 ggplot(finaldf, aes(x = group4)) +
@@ -575,8 +616,34 @@ finaldf$group <- apply(finaldf, 1, \(x) {
   return(full_str)
 }) |> unlist()
 
+# adding hybrid clusters
+load("data_files/CorrelationClustering3Disp_Allele.RData")
+finaldf <- left_join(finaldf, y = rename(clusterdf, 
+                                         "cer"="hyc", 
+                                         "par"="hyp"),
+                     by = c("gene_name"="gene_ID", 
+                            "experiment"))
+finaldf |> select(cer, par) |> table()
+finaldf |> select(hyc, hyp) |> table()
+
 # saving
 save(finaldf, levdyn_colordf, file = "data_files/FinalDataframe3Disp.RData")
+
+#### Gene Ontology Enrichment ####
+# table of gene ontology terms associated with each gene
+# each row is a term, so this is a very long table
+goslim <- read.table("data_files/downloaded_genomes_and_features/go_slim_mapping.tab", header = FALSE, sep = "\t") |>
+  as_tibble()
+colnames(goslim) <- c("ORF", # (mandatory) - Systematic name of the gene (or gene complex if it starts with CPX-)
+                      "gene", # (optional) - Gene name, if one exists
+                      "SGDID", # SGDID (mandatory) - the SGDID, unique database identifier for the gene
+                      "GO_aspect", # (mandatory) - which ontology: P=Process, F=Function, C=Component
+                      "GOslim_term", # (mandatory) - the name of the GO term that was selected as a GO Slim term
+                      "GOID", # (optional) - the unique numerical identifier of the GO term
+                      "feature_type") # (mandatory) - a description of the sequence feature, such as ORF or tRNA
+too_vague_terms <- c("cellular process", "molecular function", "biological process")
+goslim <- filter(goslim, !(GOslim_term %in% too_vague_terms) & 
+                   (ORF %in% finaldf$gene_name))
 
 ################################ Archive ############################
 # #### Reading & Cleaning Data - Lab-specific datasets ####
@@ -919,7 +986,7 @@ save(finaldf, levdyn_colordf, file = "data_files/FinalDataframe3Disp.RData")
 #               mean_sd_del = mean(sd_del))
 #   
 #   # Looking at the TFs themselves
-#   TFdel_lookup <- read_delim(file = "data_files/46TFdelLookup.csv", delim = ";", col_names = FALSE) |> select(X1, X2)
+#   TFdel_lookup <- read_delim(file = "data_files/yeastract_46TFs.csv", delim = ";", col_names = FALSE) |> select(X1, X2)
 #   colnames(TFdel_lookup) <- c("common", "systematic")
 #   # dataframe with just information on TFs, not how their deletion affects other genes
 #   TFdf <- TFdel_lookup |> rename("gene_name"="systematic") |> 

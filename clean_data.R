@@ -1182,46 +1182,6 @@ counts_TFdel <- list(cer = counts_unnorm[,infos_TFdel$cer$sample_name],
 counts_TFdel_allele <- list(cer = counts_unnorm_allele[,infos_TFdel_allele$cer$sample_name], 
                             par = counts_unnorm_allele[,infos_TFdel_allele$par$sample_name])
 
-# TF filtering: TF must have at least 2 replicates at each timepoint
-# cer
-goodTable_cer <- infos_TFdel$cer |> filter(genotype != "WT") |> 
-  select(condition) |> table()
-cer_vec <- sapply(goodTable_cer, \(x) {return(x >= 2)})
-goodConditions_cer <- rownames(goodTable_cer)[cer_vec]
-# par
-goodTable_par <- infos_TFdel$par |> filter(genotype != "WT") |> 
-  select(condition) |> table()
-par_vec <- sapply(goodTable_par, \(x) {return(x >= 2)})
-goodConditions_par <- rownames(goodTable_par)[par_vec]
-# hyc
-goodTable_hyc <- infos_TFdel_allele$cer |> filter(genotype != "WT") |> 
-  select(condition) |> table()
-hyc_vec <- sapply(goodTable_hyc, \(x) {return(x >= 2)})
-goodConditions_hyc <- rownames(goodTable_hyc)[hyc_vec]
-# hyp
-goodTable_hyp <- infos_TFdel_allele$par |> filter(genotype != "WT") |> 
-  select(condition) |> table()
-hyp_vec <- sapply(goodTable_hyp, \(x) {return(x >= 2)})
-goodConditions_hyp <- rownames(goodTable_hyp)[hyp_vec]
-# all
-goodConditions <- purrr::reduce(list(goodConditions_cer, goodConditions_par, goodConditions_hyc, goodConditions_hyp), 
-                                .f = intersect) # also ensuring the same set of TFs between species and hybrid
-# verifying these TFs do have all 6 timepoints x replicates in all 4 species/alleles
-goodTable_cer[goodConditions] |> min()
-goodTable_par[goodConditions] |> min()
-goodTable_hyc[goodConditions] |> min()
-goodTable_hyp[goodConditions] |> min() # should all have min 2
-
-# filtering
-counts_TFdel$cer <- counts_TFdel$cer[,(infos_TFdel$cer$condition %in% goodConditions) | (infos_TFdel$cer$genotype == "WT")]
-counts_TFdel$par <- counts_TFdel$par[,(infos_TFdel$par$condition %in% goodConditions) | (infos_TFdel$par$genotype == "WT")]
-infos_TFdel$cer <- infos_TFdel$cer[(infos_TFdel$cer$condition %in% goodConditions) | (infos_TFdel$cer$genotype == "WT"),]
-infos_TFdel$par <- infos_TFdel$par[(infos_TFdel$par$condition %in% goodConditions) | (infos_TFdel$par$genotype == "WT"),]
-counts_TFdel_allele$cer <- counts_TFdel_allele$cer[,(infos_TFdel_allele$cer$condition %in% goodConditions) | (infos_TFdel_allele$cer$genotype == "WT")]
-counts_TFdel_allele$par <- counts_TFdel_allele$par[,(infos_TFdel_allele$par$condition %in% goodConditions) | (infos_TFdel_allele$par$genotype == "WT")]
-infos_TFdel_allele$cer <- infos_TFdel_allele$cer[(infos_TFdel_allele$cer$condition %in% goodConditions) | (infos_TFdel_allele$cer$genotype == "WT"),]
-infos_TFdel_allele$par <- infos_TFdel_allele$par[(infos_TFdel_allele$par$condition %in% goodConditions) | (infos_TFdel_allele$par$genotype == "WT"),]
-
 # final number of genes (should all be the same number)
 nrow(counts)
 nrow(counts_allele)
@@ -1241,6 +1201,47 @@ save(counts_TFdel, counts_TFdel_allele, infos_TFdel, infos_TFdel_allele,
      file = "data_files/Cleaned_TFdel_Unnormalized_Counts.RData")
 
 ################################# Archive #######################################
+#### TF filtering: TF must have at least 2 replicates at each timepoint ####
+# Archived b/c we'll filter all these out later b/c a standard deviation of <2 points is NA
+# # cer
+# goodTable_cer <- infos_TFdel$cer |> filter(genotype != "WT") |> 
+#   select(condition) |> table()
+# cer_vec <- sapply(goodTable_cer, \(x) {return(x >= 2)})
+# goodConditions_cer <- rownames(goodTable_cer)[cer_vec]
+# # par
+# goodTable_par <- infos_TFdel$par |> filter(genotype != "WT") |> 
+#   select(condition) |> table()
+# par_vec <- sapply(goodTable_par, \(x) {return(x >= 2)})
+# goodConditions_par <- rownames(goodTable_par)[par_vec]
+# # hyc
+# goodTable_hyc <- infos_TFdel_allele$cer |> filter(genotype != "WT") |> 
+#   select(condition) |> table()
+# hyc_vec <- sapply(goodTable_hyc, \(x) {return(x >= 2)})
+# goodConditions_hyc <- rownames(goodTable_hyc)[hyc_vec]
+# # hyp
+# goodTable_hyp <- infos_TFdel_allele$par |> filter(genotype != "WT") |> 
+#   select(condition) |> table()
+# hyp_vec <- sapply(goodTable_hyp, \(x) {return(x >= 2)})
+# goodConditions_hyp <- rownames(goodTable_hyp)[hyp_vec]
+# # all
+# goodConditions <- purrr::reduce(list(goodConditions_cer, goodConditions_par, goodConditions_hyc, goodConditions_hyp), 
+#                                 .f = intersect) # also ensuring the same set of TFs between species and hybrid
+# # verifying these TFs do have all 6 timepoints x replicates in all 4 species/alleles
+# goodTable_cer[goodConditions] |> min()
+# goodTable_par[goodConditions] |> min()
+# goodTable_hyc[goodConditions] |> min()
+# goodTable_hyp[goodConditions] |> min() # should all have min 2
+# 
+# # filtering
+# counts_TFdel$cer <- counts_TFdel$cer[,(infos_TFdel$cer$condition %in% goodConditions) | (infos_TFdel$cer$genotype == "WT")]
+# counts_TFdel$par <- counts_TFdel$par[,(infos_TFdel$par$condition %in% goodConditions) | (infos_TFdel$par$genotype == "WT")]
+# infos_TFdel$cer <- infos_TFdel$cer[(infos_TFdel$cer$condition %in% goodConditions) | (infos_TFdel$cer$genotype == "WT"),]
+# infos_TFdel$par <- infos_TFdel$par[(infos_TFdel$par$condition %in% goodConditions) | (infos_TFdel$par$genotype == "WT"),]
+# counts_TFdel_allele$cer <- counts_TFdel_allele$cer[,(infos_TFdel_allele$cer$condition %in% goodConditions) | (infos_TFdel_allele$cer$genotype == "WT")]
+# counts_TFdel_allele$par <- counts_TFdel_allele$par[,(infos_TFdel_allele$par$condition %in% goodConditions) | (infos_TFdel_allele$par$genotype == "WT")]
+# infos_TFdel_allele$cer <- infos_TFdel_allele$cer[(infos_TFdel_allele$cer$condition %in% goodConditions) | (infos_TFdel_allele$cer$genotype == "WT"),]
+# infos_TFdel_allele$par <- infos_TFdel_allele$par[(infos_TFdel_allele$par$condition %in% goodConditions) | (infos_TFdel_allele$par$genotype == "WT"),]
+
 #### Filtering LowN replicates ####
 # archived b/c didn't seem necessary to know which samples came from the
 # same well. We only use TFdel genotypes for the last paper figure, and
