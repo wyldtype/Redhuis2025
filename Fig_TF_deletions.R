@@ -1,22 +1,789 @@
-sapply(c("tidyr", "dplyr", "purrr", "ggplot2", "bipartite", "ggpubr"), require, character.only=TRUE)
+sapply(c("tidyr", "dplyr", "purrr", "ggplot2", "bipartite", "ggpubr", "ggbeeswarm", "ComplexHeatmap", "circlize"), require, character.only=TRUE)
 setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2024/")
 source("functions_for_figure_scripts.R")
-load("data_files/FinalDataframe.RData")
+load("data_files/FinalDataframe3Disp.RData")
 load("data_files/TFdel.RData")
+load("data_files/TFdel_DESeq2.RData")
+load("data_files/Cleaned_Counts.RData")
+load("data_files/Cleaned_Counts_Allele.RData")
 
 TFnames <- setdiff(unique(gsub("delete", "", sample_info_tfdel$genotype)), "WT")
-#### Comparing cluster expression in different TF deletions ####
-checkTF <- function(.tf, .group, .parents_or_hybrid = "parents",
-                    .show_wt = TRUE, .show_tfdel = TRUE, 
+p_thresh <- 0.05 # because DESeq2 already corrected for FDR with alpha = 0.05
+eff_thresh <- 1
+
+#### Which TFs are differentially expressed between species? ####
+TFdel_lookup <- read_delim("data_files/downloaded_genomes_and_features/yeastract_46TFs.csv", col_names = FALSE, col_select = c(1,2), delim = ";") # gets some warnings, but so far has been fine
+colnames(TFdel_lookup) <- c("common", "systematic")
+TFdf <- finaldf |> select(gene_name, effect_size_species, pvalue_species, experiment) |>
+  right_join(y = TFdel_lookup, by = c("gene_name"="systematic"), 
+             relationship = "many-to-one")
+
+# heatmap of TF lfc between species in each environment
+effectsdf <- TFdf |> 
+  drop_na() |> 
+  select(common, experiment, effect_size_species) |> 
+  pivot_wider(id_cols = "common", names_from = "experiment",
+              values_from = "effect_size_species")
+effects_mat <- select(effectsdf, -common) |> as.matrix()
+rownames(effects_mat) <- effectsdf$common
+effects_mat[is.na(effects_mat)] <- 0
+pvalsdf <- TFdf |> 
+  drop_na() |> 
+  select(common, experiment, pvalue_species) |> 
+  pivot_wider(id_cols = "common", names_from = "experiment",
+              values_from = "pvalue_species")
+pvals_mat <- select(pvalsdf, -common) |> as.matrix()
+rownames(pvals_mat) <- pvalsdf$common
+pvals_mat[is.na(pvals_mat)] <- 0
+col_fun <- colorRamp2(c(-2, 0, 2), c("blue2", "lightyellow", "orange1"))
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/TFheatmap.pdf", 
+    width = 3, height = 8)
+Heatmap(effects_mat, col = col_fun,
+        cell_fun = function(j, i, x, y, width, height, fill) {
+  output <- ifelse(pvals_mat[i, j] < 1e-5, yes = "*", no = "")
+    grid.text(output, x, y, gp = gpar(fontsize = 10))
+})
+dev.off() 
+# GAT1, PHD1, INO4, MBP1, AFT1 most obviously higher expressed in Scer, 
+# PHO4, TEC1, MET28 higher in Spar
+# mostly consistent btwn experiments with some exceptions mainly in heat/cold
+# HAP4, RPN4 most dramatic difference in effect direction---Scer up in Heat, Spar up in all others
+
+# DE in every environment TFs
+Up_TFs_Scer <- c("GAT1", "PHD1", "INO4", "MBP1", "AFT1")
+Up_TFs_Spar <- c("PHO4", "TEC1", "MET28")
+# DE in LowN TFs
+Up_TFs_Scer_LowN <- TFdf |> 
+  filter(experiment == "LowN" &
+           pvalue_species < 1e-5 &
+           effect_size_species > 0.5) |> 
+  select(common) |> pull()
+Up_TFs_Spar_LowN <- TFdf |> 
+  filter(experiment == "LowN" &
+           pvalue_species < 1e-5 &
+           effect_size_species < -0.5) |> 
+  select(common) |> pull()
+
+# Lineplots of each TF's expression in each environment across timepoints, colored by species
+plotlist <- vector(mode = "list", length = length(TFnames) - 1)
+names(plotlist) <- sort(setdiff(TFnames, "HAP1")) # HAP1 isn't annotated, probably for the best b/c S288C has a known Ty1 insertion not present in Spar or the Heat/Cold Scer strain
+for (tf in sort(setdiff(TFnames, "HAP1"))) {
+  systematic_name <- TFdel_lookup |> filter(common == tf) |> select(systematic) |> pull()
+  plotlist[[tf]] <- annotate_figure(plotExpressionProfilePair(.cts1 = counts[systematic_name, sample_info$organism == "cer", drop = FALSE],
+                                                              .cts2 = counts[systematic_name, sample_info$organism == "par", drop = FALSE],
+                                                              .info1 = filter(sample_info, organism == "cer"),
+                                                              .info2 = filter(sample_info, organism == "par"),
+                                                              .normalization = "log2"),
+                                    top = tf)
+}
+pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/TF_lineplots.pdf",
+    width = 10, height = 100)
+ggarrange(plotlist = plotlist, common.legend = TRUE, ncol = 1, nrow = 45)
+dev.off()
+
+# Do dynamics of TFs ever diverge?
+finaldf |> filter(gene_name %in% TFdel_lookup$systematic) |> 
+  select(dynamics, experiment) |> 
+  table() # Yeah actually pretty even split
+# which TFs?
+finaldf |> filter(gene_name %in% TFdel_lookup$systematic) |> 
+  left_join(TFdel_lookup, by = c("gene_name"="systematic")) |> 
+  select(common, dynamics) |> 
+  table()
+# BAS1 has especially different dynamics in LowN. But it's mainly the 1hr timepoint plus a level effect
+annotate_figure(plotExpressionProfileTFdel(.cts1 = counts_tfdel["YKR099W", sample_info_tfdel$organism == "cer" &
+                                                                  sample_info_tfdel$genotype == "WT", drop = FALSE],
+                                           .cts2 = counts_tfdel["YKR099W", sample_info_tfdel$organism == "par" &
+                                                                  sample_info_tfdel$genotype == "WT", drop = FALSE],
+                                           .cts3 = counts_tfdel["YKR099W", sample_info_tfdel$organism == "cer" & 
+                                                                  sample_info_tfdel$genotype == "BAS1delete", drop = FALSE],
+                                           .cts4 = counts_tfdel["YKR099W", sample_info_tfdel$organism == "par" &
+                                                                  sample_info_tfdel$genotype == "BAS1delete", drop = FALSE],
+                                          .info1 = filter(sample_info_tfdel, organism == "cer" & genotype == "WT"),
+                                          .info2 = filter(sample_info_tfdel, organism == "par" & genotype == "WT"),
+                                          .info3 = filter(sample_info_tfdel, organism == "cer" & genotype == "BAS1delete"),
+                                          .info4 = filter(sample_info_tfdel, organism == "par" & genotype == "BAS1delete"),
+                                          .normalization = "log2"),
+                top = "BAS1")
+# Only one TF is in decreasing cluster (SKN7 in Scer, and even that is pretty barely decreasing)
+finaldf |> filter(gene_name %in% TFdel_lookup$systematic & experiment == "LowN") |> 
+  left_join(TFdel_lookup, by = c("gene_name"="systematic")) |> 
+  select(cer, par) |> table()
+
+# are there any environments with many 1-2 divergers?
+finaldf |> filter(gene_name %in% TFdel_lookup$systematic &
+                    cer %in% c(1, 2) &
+                    par %in% c(1, 2)) |> 
+  left_join(TFdel_lookup, by = c("gene_name"="systematic")) |> 
+  select(dynamics, experiment) |> table() # CC and LowPi
+# which TFs in those environments?
+finaldf |> 
+  filter(gene_name %in% TFdel_lookup$systematic & 
+           experiment == "CC" & cer != par) |> 
+  left_join(TFdel_lookup, by = c("gene_name"="systematic")) |> 
+  select(cer, par, common) # CC just has no 0 genes
+finaldf |> 
+  filter(gene_name %in% TFdel_lookup$systematic & 
+           experiment == "LowPi" & cer != par) |> 
+  left_join(TFdel_lookup, by = c("gene_name"="systematic")) |> 
+  select(cer, par, common) 
+# GCN4 is only one that's expressed high enough in either species to see a dynamics divergence
+# (it's a very highly expressed TF)
+# But it's very conserved in LowN
+
+# Conclusion: really no notable dynamics divergence in LowN
+# GCN4 spiking up in Spar in LowPi is only notable dynamic divergence
+
+# TODO: is TF differential expression related to number
+# of DE genes in each deletion?
+plotdf <- TFdf |> 
+  filter(experiment == "LowN") |> 
+  select(common, 
+         effect_size_species, 
+         pvalue_species) |> 
+  right_join(y = TFdeldf,
+             by = c("common"="deletion"),
+             relationship = "one-to-many") |> 
+  group_by(organism, common, effect_size_species, pvalue_species) |> 
+  summarise(nDE = sum(abs(lfc) > eff_thresh & padj < p_thresh))
+ggplot(plotdf, aes(x = effect_size_species,
+                   y = nDE)) +
+  geom_line(aes(group = common), alpha = 0.5) +
+  geom_point(aes(color = organism)) +
+  geom_text(aes(label = common, color = organism), 
+            check_overlap = TRUE, nudge_x = 0.1)
+# No obvious relationship. TFs higher expressed in Spar tend to have fewer effects in Scer except for GCN4 and MET28. 
+# But the reverse isn't true---plenty of Spar effects in TFs higher expressed in Scer. 
+# Hybrid tends to have more similar effects to Spar than Scer, but it depends on TF
+
+#### Does TF deletion affect level or dynamics? ####
+# 3 options for each gene in each species for each TF:
+# 1) not affected by TF deletion --- (no significant lfc/pval at either TP1 or TP3)
+# 2) level affected by TF deletion --- (significant lfc/pval at both TP1 and TP3 in same direction)
+# 3) dynamics affected by TF deletion --- (significant lfc/pval at TP1, or TP3, or both but not in the same direction)
+eff_thresh <- 1
+checkEffect <- function(.lfcs, .pvals) {
+  if (length(.lfcs) != length(.pvals)) {
+    stop("vectors are not the same length\n")
+  }
+  if (length(.lfcs) < 2) {
+    return("single")
+  }
+  if (all(.pvals > p_thresh)) {
+    return("none")
+  }
+  sig_lfcs <- .lfcs[.pvals < p_thresh]
+  if (all(abs(sig_lfcs) < eff_thresh)) {
+    return("none")
+  }
+  if (all(.pvals < p_thresh) & 
+      length(unique(sign(.lfcs))) == 1) {
+    return("level")
+  }
+  else {
+    return("dynamics")
+  }
+}
+# tests for checkEffect
+checkEffect(c(5, 3), c(0.001, 0.0005)) # level
+checkEffect(c(0.5, 3), c(0.001, 0.0005)) # debatable case: one effect size isn't over the eff_thresh, choose level or dynamics
+checkEffect(c(54, -9, 5), c(1, 1, 0.1)) # none, no sig pvalues
+checkEffect(c(54, -9, -0.5), c(1, 1, 0.01)) # none, the sig pvalue doesn't have a large enough effect size
+checkEffect(c(2, -1), c(0.04, 0.01)) # dynamics
+
+effectdf <- TFdeldf |> 
+  # filter(timepoint != "TP2") |> 
+  group_by(deletion, gene_name, organism) |> 
+  summarise(effect = checkEffect(.lfcs = lfc, .pvals = padj)) |> 
+  ungroup()
+
+# example, ADE17 (YMR120C) has level effect in BAS1, known to be directly positively regulated by Bas1p
+bas1_genes <- effectdf |> filter(deletion == "BAS1" & effect == "level") |> 
+  select(gene_name) |> pull() |> unique()
+TFdeldf |> filter(deletion == "BAS1" & 
+                    gene_name %in% bas1_genes &
+                    timepoint != "TP2") |> 
+  arrange(lfc)
+
+# Note: TFdel samples missing replicates do not have an estimate in DESeq2:
+TFdeldf |> filter(deletion == "SWI4" & organism == "cer" & timepoint == "TP3")
+# Therefore, certain genotypes will only have one timepoint going into checkEffect
+# such as, SWI4 in Scer:
+effectdf |> filter(deletion == "SWI4" & organism == "cer") |> select(effect) |> table()
+
+effect_tab <- effectdf |> select(deletion, effect) |> table() 
+effect_tab # more dynamics than level, but plenty of level
+tf_order <- names(sort(rank(-(effect_tab[,"dynamics"] + effect_tab[,"level"]))))
+plotdf <- effectdf |> filter(!(effect %in% c("single", "none")))
+# all TFs
+ggplot(plotdf, 
+       aes(x = deletion)) + 
+  geom_bar(aes(fill = effect)) +
+  scale_x_discrete(breaks = tf_order, limits = tf_order) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  facet_wrap(~organism)
+# Up Scer TFs
+ggplot(filter(plotdf, deletion %in% Up_TFs_Scer_LowN), 
+       aes(x = deletion)) + 
+  geom_bar(aes(fill = effect)) +
+  scale_x_discrete(breaks = tf_order, limits = tf_order[tf_order %in% Up_TFs_Scer_LowN]) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  facet_wrap(~organism) 
+# Up Spar TFs
+ggplot(filter(plotdf, deletion %in% Up_TFs_Spar_LowN), 
+       aes(x = deletion)) + 
+  geom_bar(aes(fill = effect)) +
+  scale_x_discrete(breaks = tf_order, limits = tf_order[tf_order %in% Up_TFs_Spar_LowN]) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  facet_wrap(~organism) # A weird looking plot, mainly b/c PHO4 and HAP2 have a ton of hybrid effects
+
+# does shuffling lfcs create same level/dynamic distribution?
+shuffleLFCs <- function(.df, .preserve_groups = NULL) {
+  if (!is.null(.preserve_groups)) {
+    griddf <- .df |> 
+      select(.preserve_groups) |> 
+      unique()
+    vars <- colnames(griddf)
+    outdf <- map(c(1:nrow(griddf)), \(i) {
+      df_group <- .df
+      for (var in vars) {
+        df_group <- filter(df_group, 
+                           .data[[var]] == pull(griddf[i, which(vars == var)]))
+      }
+      shuffle_idx <- c(1:nrow(df_group)) |> 
+        sample(size = nrow(df_group), replace = FALSE)
+      df_group$pval <- df_group$pval[shuffle_idx]
+      df_group$padj <- df_group$padj[shuffle_idx]
+      df_group$lfc <- df_group$lfc[shuffle_idx]
+      return(df_group)
+  }) |> purrr::reduce(bind_rows)
+  return(outdf)
+  }
+  else {
+    outdf <- .df
+    shuffle_idx <- c(1:nrow(outdf)) |> 
+      sample(size = nrow(outdf), replace = FALSE)
+    outdf$pval <- outdf$pval[shuffle_idx]
+    outdf$padj <- outdf$padj[shuffle_idx]
+    outdf$lfc <- outdf$lfc[shuffle_idx]
+    return(outdf)
+  }
+}
+# # tests for shuffleLFCs
+# testdf <- TFdeldf |> 
+#   filter(organism %in% c("cer", "par") &
+#            deletion %in% c("TEC1", "INO4")) |> 
+#   slice_sample(n = 100000)
+# testdf |> filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
+#   select(organism, deletion) |> table() # purposefully choosing very asymetrical tfs
+# # no group preservation
+# shuffleLFCs(testdf) |> filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
+#   select(organism, deletion) |> table() # even spread on both axes
+# # just preserve nEffects per TF:
+# shuffleLFCs(testdf, .preserve_groups = "deletion") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
+#   select(organism, deletion) |> table()
+# # just preserve nEffects per organism
+# shuffleLFCs(testdf, .preserve_groups = "organism") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
+#   select(organism, deletion) |> table()
+# # preserve nEffects per organism per deletion (should be the same counts as unshuffled)
+# shuffleLFCs(testdf, .preserve_groups = c("deletion", "organism")) |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
+#   select(organism, deletion) |> table()
+
+# plotting shuffle with full data
+shuffledf <- TFdeldf |> 
+  shuffleLFCs(.preserve_groups = c("deletion", "organism")) |> 
+  group_by(deletion, gene_name, organism) |> 
+  summarise(effect = checkEffect(.lfcs = lfc, .pvals = padj)) |> 
+  ungroup() |> 
+  filter(!(effect %in% c("none", "single")))
+ggplot(shuffledf, 
+       aes(x = deletion)) + 
+  geom_bar(aes(fill = effect)) +
+  scale_x_discrete(breaks = tf_order, limits = tf_order) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  facet_wrap(~organism) 
+# Level effects basically go away. True whether you preserve same nEffects per organism or not
+
+# Conclusion: way more dynamics than level, but level divergers are more than expected by chance
+# Amount of level divergers looks more steady per tf
+# is that because it's the same genes that have level effects in many TFs?
+
+# UpSet only allows sets up to 31, so only including top 31 TFs with the most effects
+makeTFsUpset(.org = "par", .effect = "level", # change to different organisms
+             .tfs = tf_order[1:31]) 
+# HAP2 has the most shared effects in Scer, shared with GLN3, HAP3, HAP5, GCR2, RTG3:
+makeTFsUpset(.org = "cer", .effect = "level", 
+             .tfs = c("GLN3", "HAP2", "HAP3", "HAP5", "GCR2", "RTG3"))
+makeTFsUpset(.org = "par", .effect = "level",
+             .tfs = c("GLN3", "HAP2", "HAP3", "HAP5", "GCR2", "RTG3")) # even more true in Spar
+# Not really seen to the same extent in dynamics:
+makeTFsUpset(.org = "cer", .effect = "dynamics",
+             .tfs = c("GLN3", "HAP2", "HAP3", "HAP5", "GCR2", "RTG3"))
+makeTFsUpset(.org = "par", .effect = "dynamics", 
+             .tfs = c("GLN3", "HAP2", "HAP3", "HAP5", "GCR2", "RTG3")) # even more true in Spar
+# What are those 23 genes in Spar that all respond to HAP2-3-5 deletions with level change?
+effectdf |> filter(deletion %in% c("HAP2", "HAP3", "HAP5") & 
+                     organism == "par" & 
+                     effect == "level") |> select(gene_name) |> 
+  table() |> sort(decreasing = TRUE)
+# ATP synthetase components: ATP1, ATP3, ATP16, ATP5, ATP17
+# other mitochondiral inner membrane respiratory genes: PET9, MIC10, COX9
+# Makes sense, HAP2/3/4/5 is a complex that activates respiratory gene expression
+
+# conclusion: except for the HAP complex, different TFdels cause different sets of genes to change level
+
+#### Dynamics Example: URE2 represses GAT1 and GLN3 ####
+makeTFsUpset(.org = "cer", .effect = "level", 
+             .tfs = c("GLN3", "GAT1", "URE2")) # no shared level effects
+makeTFsUpset(.org = "cer", .effect = "dynamics", 
+             .tfs = c("GLN3", "GAT1", "URE2")) # a decent number of shared dynamics effects
+makeTFsUpset(.org = "cer", .effect = "dynamics",
+             .df = shuffledf, .tfs = c("GLN3", "GAT1", "URE2")) # more than seen by chance
+# also true in par, hyc, hyp, but GAT1 and URE2 just have way fewer single effects and GLN3 has way more
+# so Spar's URE2-GAT1-GLN3 environment is dominant in the hybrid. 
+# Scer has much higher GAT1 expression, why would Spar's environment be dominant? Seems like a coding change
+# Other big difference: Scer has about 50 GAT1-URE2 shared genes, where Spar and hybrid only have 3-5
+# What are these genes?
+cer_tab <- effectdf |> filter(deletion %in% c("GAT1", "URE2") & 
+                     organism == "cer" & 
+                     effect == "dynamics") |> select(gene_name) |> 
+  table() |> sort(decreasing = TRUE)
+cer_genes <- rownames(cer_tab)[cer_tab == 2]
+par_tab <- effectdf |> filter(deletion %in% c("GAT1", "URE2") & 
+                                organism == "par" & 
+                                effect == "dynamics") |> select(gene_name) |> 
+  table() |> sort(decreasing = TRUE)
+par_genes <- rownames(par_tab)[par_tab == 2]
+intersect(cer_genes, par_genes) # DUR12, MEP1, both urea/ammonia enzymes
+# where are they in non-Scer organisms?
+effectdf |> filter(gene_name %in% setdiff(cer_genes, par_genes) &
+                     !(effect %in% c("none", "single"))) |> 
+  select(deletion, organism) |> table()
+# two conclusions: 
+# 1) either both parents have a lot of effects or both hybrid alleles do (GLN3, GCR2, MET28 are exceptions where all 4 have many effects)
+# 2) when there is a stark difference in which TF affects which organism, the Scer parental gene copies are most sensitive (SOK2, STB5, RTG3, URE2, GZF3, GAT1, GCN4, ARG81)
+
+# what clusters are these genes in?
+finaldf |> filter(gene_name %in% setdiff(cer_genes, par_genes) &
+                    experiment == "LowN") |> 
+  select(cer, par) |> table() # heavily conserved, but even split between 1-1 and 2-2
+gene_idxs11 <- finaldf |> filter(gene_name %in% setdiff(cer_genes, par_genes) &
+                                   experiment == "LowN" &
+                                   cer == 1 & par == 1) |> select(gene_name) |> pull()
+gene_idxs22 <- finaldf |> filter(gene_name %in% setdiff(cer_genes, par_genes) &
+                                   experiment == "LowN" &
+                                   cer == 2 & par == 2) |> select(gene_name) |> pull()
+getGOSlimDf(.idxs = gene_idxs11, .group_name = "GAT1_URE2_ScerUnique11") # 12 catabolic genes (including allatonin degredation genes DALs 1, 2, 4, 7)
+getGOSlimDf(.idxs = gene_idxs22, .group_name = "GAT1_URE2_ScerUnique22") # 18 nucleolus/15 rRNA processing genes, 6 helicase (mainly DEAD box RNA helicases for rRNA processing)
+
+# What timepoint is the dynamics affected? If this is related to the URE2-GAT1 interaction, we'd expect the LowN timepoint
+# 1-1
+plotGenesTFdel(.gene_idxs = gene_idxs11, .tf = "GAT1") # yes later timepoint, mainly Scer but a little Spar
+plotGenesTFdel(.gene_idxs = gene_idxs11, .tf = "URE2") # both timepoints, just Scer
+# what about hybrid? 
+plotGenesTFdel(.gene_idxs = gene_idxs11, .tf = "GAT1", .parents_or_hybrid = "hybrid")
+plotGenesTFdel(.gene_idxs = gene_idxs11, .tf = "URE2", .parents_or_hybrid = "hybrid")
+# Interestingly there is an effect at the early timepoint in both hybrid alleles. Why weren't they flagged as dynamic effects?
+effectdf |> filter(organism %in% c("hyc", "hyp") &
+                     deletion %in% c("GAT1", "URE2") &
+                     gene_name %in% gene_idxs) |> select(effect, deletion) |> table()
+# They're all URE2 only, but there is a slight effect in GAT1
+TFdeldf |> filter(organism %in% c("hyc", "hyp") &
+                    deletion == "GAT1" &
+                    timepoint == "TP1" &
+                    gene_name %in% gene_idxs) |> 
+  arrange(desc(lfc)) # Only enough power to detect a couple, namely the very classy haze protective factor HPF1, which reduces cloudiness in white wines
+# But it's not just HPF1/YOL155C causing this -- most hybrid orthologs are up decently in URE2, just without significant pvalues
+
+# 2-2
+plotGenesTFdel(.gene_idxs = gene_idxs22, .tf = "GAT1") # yowza later timepoint, only Scer
+plotGenesTFdel(.gene_idxs = gene_idxs22, .tf = "URE2") # mostly later timepoint, also yowza, only Scer
+# hybrid
+plotGenesTFdel(.gene_idxs = gene_idxs22, .tf = "GAT1", .parents_or_hybrid = "hybrid")
+plotGenesTFdel(.gene_idxs = gene_idxs22, .tf = "URE2", .parents_or_hybrid = "hybrid")
+# Here the hybrid effect at TP3 is in the opposite direction (and weaker)
+
+# Taking stock: identified ~50 genes that had dynamics affected by both GAT1 and URE2 deletion
+# in Scer but not in Spar or hybrid alleles
+# Interesting b/c GAT1 is expressed much higher in Scer (and hyc allele transiently in response to LowN)
+# These genes are 50-50 split between increasing and decreasing cluster, but they have all conserved dynamics btwn species
+# GAT1/URE2 deletion affects late timepoint the strongest in Scer, no effect in Spar
+# in hybrid, there is some evidence of an early timepoint effect---especially URE2 delete on increasing genes
+# but the late timepoint effect is really only seen in Scer
+
+#### Are TF del effects consistent between species? ####
+
+# all TFs, all effect types
+makeEffectsUpset()
+# example TF at different effect types
+test_tf <- "BAS1"
+makeEffectsUpset(.tf = test_tf)
+makeEffectsUpset(.tf = test_tf, .effect = "level") # level has more effects shared btwn species
+makeEffectsUpset(.tf = test_tf, .effect = "dynamics")
+# Conclusion: Majority of effects are not only specific to organisms but also even hybrid alleles
+
+# What if we ignore effect type? Just genes and tf
+makeGeneTFUpset <- function(.tf = TFnames) {
+  lt <- list(cer = filter(effectdf, organism == "cer" & deletion %in% .tf & !(effect %in% c("none", "single"))),
+             par = filter(effectdf, organism == "par" & deletion %in% .tf & !(effect %in% c("none", "single"))),
+             hyc = filter(effectdf, organism == "hyc" & deletion %in% .tf & !(effect %in% c("none", "single"))),
+             hyp = filter(effectdf, organism == "hyp" & deletion %in% .tf & !(effect %in% c("none", "single")))) |> 
+    map(.f = mutate, gene_tf_eff = paste0(gene_name, deletion)) |> 
+    map(.f = select, gene_tf_eff) |> 
+    map(.f = pull)
+  plotdf <- make_comb_mat(lt)
+  p <- UpSet(plotdf, 
+             set_order = c("cer", "par", "hyc", "hyp"),
+             comb_order = order(comb_size(plotdf)), # this, I will say, makes ggplot look like a freakin' dream. I literally just wanted to rename the histogram y axis and add counts to the top of the bars
+             top_annotation = HeatmapAnnotation( 
+               "number of genes" = anno_barplot(comb_size(plotdf), 
+                                                ylim = c(0, max(comb_size(plotdf))*1.1),
+                                                border = FALSE, 
+                                                gp = gpar(fill = "black"), 
+                                                height = unit(4, "cm")), 
+               annotation_name_side = "left", 
+               annotation_name_rot = 90))
+  draw(p)
+  decorate_annotation("number of genes", {
+    grid.text(comb_size(plotdf)[column_order(p)], x = seq_along(comb_size(plotdf)), y = unit(comb_size(plotdf)[column_order(p)], "native") + unit(2, "pt"), 
+              default.units = "native", just = c("left", "bottom"), 
+              gp = gpar(fontsize = 6, col = "#404040"), rot = 45)
+  })
+}
+makeGeneTFUpset() # Nope, still gene/TF combos are unique
+
+# TODO: How are these effects this unique? Even each hybrid allele has mostly 
+# unique effects? If I shuffled effects randomly among genes would it look like this?
+
+
+# TODO: does shuffling effects produce same kind of plot?
+shuffleeffectdf <- 
+
+# TODO: For each TF, are effects in hybrid more similar to one parent or the other? Or does hyc/hyp allele matter?
+
+#### Proportion of LowN divergers unique to LowN ####
+# In environmental patterns we saw that most genes are only detected
+# as divergent in individual environments. How many LowN divergers
+# wouldn't be considered divergent in other environments?
+tabdf <- finaldf |> pivot_wider(id_cols = "gene_name",
+                                names_from = c("experiment"),
+                                values_from = c("dynamics")) |> 
+  filter(LowN == "diverged") |> 
+  group_by(LowPi, CC, Heat, Cold, HAP4) |>
+  summarise(n = n()) |> 
+  arrange(desc(n)) |> 
+  ungroup()
+View(tabdf)
+tabdf$n_diverged <- apply(tabdf, 1, \(x) {sum(x == "diverged")})
+# number of genes diverging in x other environments
+# x = 0
+tabdf |> filter(n_diverged == 0) |> select(n) |> pull() |> sum()
+# x = 1
+tabdf |> filter(n_diverged == 1) |> select(n) |> pull() |> sum()
+# x = 2
+tabdf |> filter(n_diverged == 2) |> select(n) |> pull() |> sum()
+# x = 3
+tabdf |> filter(n_diverged == 3) |> select(n) |> pull() |> sum()
+# x = 4
+tabdf |> filter(n_diverged == 4) |> select(n) |> pull() |> sum()
+# x = 5
+tabdf |> filter(n_diverged == 5) |> select(n) |> pull() |> sum()
+# histogram
+ggplot(tabdf, aes(x = n_diverged, y = n)) + 
+  geom_col()
+# which environments are they diverged the most in?
+sum(tabdf$n[tabdf$CC == "diverged"], na.rm = TRUE)
+sum(tabdf$n[tabdf$LowPi == "diverged"], na.rm = TRUE)
+sum(tabdf$n[tabdf$Cold == "diverged"], na.rm = TRUE)
+sum(tabdf$n[tabdf$Heat == "diverged"], na.rm = TRUE)
+sum(tabdf$n[tabdf$HAP4 == "diverged"], na.rm = TRUE) # about even
+#### Do TFs with divergent expression have more differences between species in which genes they affect? ####
+plotdf <- left_join(TFdeldf, filter(finaldf, experiment == "LowN"),
+                    by = "gene_name") |> 
+  filter(organism %in% c("cer", "par") &
+           padj < p_thresh & abs(lfc) > eff_thresh) |> 
+  drop_na() |>
+  group_by(organism, timepoint, deletion, .drop = FALSE) |> 
+  summarise(nDE = sum(abs(lfc) > eff_thresh & padj < p_thresh)) |> 
+  ungroup()
+plotdf <- left_join(expand(plotdf, organism, timepoint, deletion), plotdf,
+                    by = c("organism", "timepoint", "deletion"))
+plotdf$nDE[is.na(plotdf$nDE)] <- 0
+plotdf <- pivot_wider(plotdf, id_cols = c("timepoint", "deletion"),
+                      names_from = "organism",
+                      values_from = "nDE")
+
+Scer_up_TFs <- c("GAT1", "PHD1", "INO4", "MBP1",
+                 "AFT1", "MIG1", "RGT1", "SWI5")
+Spar_up_TFs <- c("PHO4", "TEC1", "MET28")
+
+# conserved TFs
+plotdf_cons <- filter(plotdf, !(deletion %in% c(Scer_up_TFs,
+                                                Spar_up_TFs)))
+ggplot(plotdf_cons, aes(x = cer, y = par)) + 
+  geom_point(aes(shape = timepoint, color = deletion)) +
+  geom_line(aes(color = deletion, group = deletion)) +
+  geom_abline(slope = 1, intercept = 0) +
+  ylim(c(0, 500)) +
+  xlim(c(0, 500))
+# up Scer TFs
+plotdf_cer <- filter(plotdf, deletion %in% Scer_up_TFs) 
+ggplot(plotdf_cer, aes(x = cer, y = par)) + 
+  geom_point(aes(shape = timepoint, color = deletion)) +
+  geom_line(aes(color = deletion, group = deletion)) +
+  geom_abline(slope = 1, intercept = 0) +
+  ylim(c(0, 500)) +
+  xlim(c(0, 500))
+# up Spar TFs
+plotdf_par <- filter(plotdf, deletion %in% Spar_up_TFs)
+ggplot(plotdf_par, aes(x = cer, y = par)) + 
+  geom_point(aes(shape = timepoint, color = deletion)) +
+  geom_line(aes(color = deletion, group = deletion)) +
+  geom_abline(slope = 1, intercept = 0) +
+  ylim(c(0, 500)) +
+  xlim(c(0, 500))
+
+#### Quantifying TFdel effect on cluster avg expression ####
+# A more formalized version of the avg expr plots
+# that summarizes which deletions cause which clusters'
+# average expression to shift
+getTFdelEffect <- function(.tf, .clust,
+                           .parents_or_hybrid = "parents",
+                           .scaled = TRUE,
+                           .n_downsample = 0) {
+  if (.parents_or_hybrid == "parents") {
+    gene_idxs_cer <- finaldf |> filter(experiment == "LowN" &
+                                         cer == .clust) |> 
+      select(gene_name) |> pull()
+    gene_idxs_par <- finaldf |> filter(experiment == "LowN" &
+                                         par == .clust) |> 
+      select(gene_name) |> pull()
+    count_mat <- counts_tfdel
+    infodf <- sample_info_tfdel
+  }
+  if (.parents_or_hybrid == "hybrid") {
+    gene_idxs_cer <- finaldf |> filter(experiment == "LowN" &
+                                         hyc == .clust) |> 
+      select(gene_name) |> pull()
+    gene_idxs_par <- finaldf |> filter(experiment == "LowN" &
+                                         hyp == .clust) |> 
+      select(gene_name) |> pull()
+    count_mat <- counts_tfdel_allele
+    infodf <- sample_info_tfdel_allele |> 
+      mutate(organism = if_else(allele == "cer",
+                                true = "hyc",
+                                false = "hyp"))
+  }
+  if (.n_downsample > 0) {
+    gene_idxs_cer <- gene_idxs_cer[sample(c(1:length(gene_idxs_cer)),
+                                          size = .n_downsample,
+                                          replace = FALSE)]
+    gene_idxs_par <- gene_idxs_par[sample(c(1:length(gene_idxs_par)),
+                                          size = .n_downsample,
+                                          replace = FALSE)]
+  }
+  sample_cols_cer_wt <- which(infodf$genotype == "WT" &
+                                infodf$allele == "cer")
+  sample_cols_cer_del <- which(infodf$genotype == paste0(.tf, "delete") &
+                                 infodf$allele == "cer")
+  sample_cols_par_wt <- which(infodf$genotype == "WT" &
+                                infodf$allele == "par")
+  sample_cols_par_del <- which(infodf$genotype == paste0(.tf, "delete") &
+                                 infodf$allele == "par")
+  if (.scaled) {
+    gene_counts_cer_wt <- count_mat[gene_idxs_cer, sample_cols_cer_wt] |> 
+      t() |> scale() |> t()
+    gene_counts_cer_del <- count_mat[gene_idxs_cer, sample_cols_cer_del] |> 
+      t() |> scale() |> t()
+    gene_counts_par_wt <- count_mat[gene_idxs_par, sample_cols_par_wt] |> 
+      t() |> scale() |> t()
+    gene_counts_par_del <- count_mat[gene_idxs_par, sample_cols_par_del] |> 
+      t() |> scale() |> t()
+    gene_counts_cer <- cbind(gene_counts_cer_wt, gene_counts_cer_del)
+    gene_counts_par <- cbind(gene_counts_par_wt, gene_counts_par_del)
+  }
+  if (!.scaled) {
+    gene_counts_cer <- count_mat[gene_idxs_cer, c(sample_cols_cer_wt,
+                                                  sample_cols_cer_del)]
+    gene_counts_par <- count_mat[gene_idxs_par, c(sample_cols_par_wt,
+                                                  sample_cols_par_del)]
+  }
+  avgdf <- bind_rows(tibble(sample_name = colnames(gene_counts_cer),
+                            avg = colMeans(gene_counts_cer, na.rm = TRUE)), # NaNs can arise from genes with all 0 counts in one species/genotype (no variance)
+                     tibble(sample_name = colnames(gene_counts_par),
+                            avg = colMeans(gene_counts_par, na.rm = TRUE))) |> 
+    left_join(infodf, by = c("sample_name")) |> 
+    group_by(time_point_str, genotype, organism) |> 
+    summarise(sd = sd(avg),
+              mean = mean(avg)) |> 
+    mutate(genotype = gsub(paste0(.tf, "delete"), "del", genotype)) |> 
+    pivot_wider(id_cols = c("time_point_str", "organism"),
+                values_from = c("sd", "mean"),
+                names_from = "genotype") |> 
+    mutate(mean_dir = if_else((mean_WT - 1*sd_WT) > (mean_del + 1*sd_del),
+                              true = "tfdel_low",
+                              false = if_else((mean_WT + 1*sd_WT) < (mean_del - 1*sd_del),
+                                              true = "tfdel_high",
+                                              false = "none")),
+           tf = .tf,
+           clust = .clust)
+  return(avgdf)
+}
+
+# tests for getTFdelEffect
+# HAP1, 1, 1 --- tfdel noticeably down at TP3, but only in centered counts
+# (Same deal with ROX1 1 1, although it's sig both ways)
+# Illustrating how scaled expression compares to unscaled 
+# (both are informative for a screen, but in different ways---scaled informs
+# what the trend among many genes is while unscaled shows the strength of 
+# the expression change, even if it's only from one gene's expression change)
+getTFdelEffect("HAP1", .clust = 1, .scaled = TRUE)
+getTFdelEffect("HAP1", .clust = 1, .scaled = FALSE)
+getTFdelEffect("HAP1", 1, .scaled = FALSE, .parents_or_hybrid = "hybrid")
+getTFdelEffect("HAP1", 1, .scaled = TRUE, .parents_or_hybrid = "hybrid")
+# Was an edge case when we grouped by both species' clusters:
+# GCN4 really looks down in par at TP3, but
+# the sd is just too high
+getTFdelEffect("GCN4", 1, .scaled = FALSE)
+getTFdelEffect("GCN4", 1, .scaled = TRUE)
+
+griddf <- expand_grid(tf = TFnames,
+                      clust = c(0, 1, 2),
+                      parents_or_hybrid = c("parents", "hybrid")) |> 
+  filter(!(tf %in% c("RTG1", "BAS1") & parents_or_hybrid == "hybrid")) # missing TFs from hybrid
+
+# Try with both scaled/unscaled
+# and full/downsampled counts
+n_downsample <- filter(finaldf, experiment == "LowN") |> select(cer, par) |> table() |> min()
+quantdf <- map(c(1:nrow(griddf)), \(i) {
+  getTFdelEffect(.tf = griddf$tf[i],
+                 .clust = griddf$clust[i],
+                 .parents_or_hybrid = griddf$parents_or_hybrid[i],
+                 .scaled = TRUE,
+                 .n_downsample = 0)
+}) |> bind_rows()
+
+sum(is.na(quantdf))
+sum(is.na(quantdf$sd_del)) + sum(is.na(quantdf$mean_dir)) + sum(is.na(quantdf$mean_del)) # NAs come from misisng TFdel replicates. If there are fewer than 2 replicates at a certain timepoint, we don't want to count it
+quantdf <- drop_na(quantdf) |> ungroup()
+# Should be tfdel_low at TP3 in Scer
+quantdf |> filter(tf == "ROX1" & clust == 1 & organism == "cer")
+# at any given timepoint and cluster combo, there is a lot
+# of variation in the number of TFs that cause means to change:
+quantdf |> 
+  filter(organism %in% c("cer", "par")) |> 
+  group_by(organism, clust, time_point_str) |> 
+  summarise(n_up = sum(mean_dir == "tfdel_high"),
+            n_down = sum(mean_dir == "tfdel_low")) |> View()
+
+# How much is the same effect for both species in conserved vs diverged clusters?
+checkMeanDirection <- function(.cer_dir, .par_dir) {
+  if (.cer_dir == "none" & .par_dir == "none") {
+    return("neither")
+  }
+  if (.cer_dir != "none" & .par_dir == "none") {
+    return("Scer")
+  }
+  if (.cer_dir == "none" & .par_dir != "none") {
+    return("Spar")
+  }
+  if (.cer_dir != "none" & .par_dir != "none") {
+    if (.cer_dir == .par_dir) {
+      return("both, same direction")
+    }
+    else {
+      return("both, opposite direction")
+    }
+  }
+}
+# parents
+plotdf <- quantdf |> filter(organism %in% c("cer", "par")) |> 
+  select(time_point_str, organism, tf, mean_dir,
+         clust) |>
+  pivot_wider(id_cols = c("time_point_str", "tf", "clust"), 
+              names_from = "organism", values_from = "mean_dir",
+              names_prefix = "mean_dir_") |> 
+  drop_na()
+plotdf$org_affected <- map2(plotdf$mean_dir_cer, plotdf$mean_dir_par,
+                            checkMeanDirection) |> unlist()
+plotdf$org_affected |> table()
+plotdf <- filter(plotdf, org_affected != "neither")
+# Are different TFdels/timepoints affected differently?
+# each TP, all TFs
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/bars.pdf",
+    width = 5.5, height = 2.5)
+ggplot(plotdf, aes(x = factor(clust))) + 
+  geom_bar(aes(fill = org_affected)) +
+  scale_x_discrete(breaks = factor(c(0:2)),
+                   limits = factor(c(0:2)),
+                   labels = c("static", "increasing", "decreasing")) +
+  scale_fill_manual(values = c("orange1", "blue2", "black", "turquoise"),
+                    limits = c("Scer", "Spar", "both, same direction", "both, opposite direction"),
+                    breaks = c("Scer", "Spar", "both, same direction", "both, opposite direction")) +
+  xlab("cluster") +
+  ylab("number of TF deletions\nthat shift cluster mean\nexpression (up or down)") +
+  facet_wrap(~time_point_str) +
+  guides(fill=guide_legend(title="organism affected")) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+dev.off()
+
+# hybrid
+plotdf <- quantdf |> filter(organism %in% c("hyc", "hyp")) |> 
+  select(time_point_str, organism, tf, mean_dir,
+         clust) |>
+  pivot_wider(id_cols = c("time_point_str", "tf", "clust"), 
+              names_from = "organism", values_from = "mean_dir",
+              names_prefix = "mean_dir_") |> 
+  drop_na()
+plotdf$org_affected <- map2(plotdf$mean_dir_hyc, plotdf$mean_dir_hyp,
+                            checkMeanDirection) |> unlist()
+plotdf$org_affected |> table()
+plotdf <- filter(plotdf, org_affected != "neither")
+# Are different TFdels/timepoints affected differently?
+# each TP, all TFs
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/bars_hybrid.pdf",
+    width = 5.5, height = 2.5)
+ggplot(plotdf, aes(x = factor(clust))) + 
+  geom_bar(aes(fill = org_affected)) +
+  scale_x_discrete(breaks = factor(c(0:2)),
+                   limits = factor(c(0:2)),
+                   labels = c("static", "increasing", "decreasing")) +
+  scale_fill_manual(values = c("orange1", "blue2", "black", "turquoise"),
+                    limits = c("Scer", "Spar", "both, same direction", "both, opposite direction"),
+                    breaks = c("Scer", "Spar", "both, same direction", "both, opposite direction")) +
+  xlab("cluster") +
+  ylab("number of TF deletions\nthat shift cluster mean\nexpression (up or down)") +
+  facet_wrap(~time_point_str) +
+  guides(fill=guide_legend(title="organism affected")) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+dev.off() # not only are many more effects seen in both alleles, very few effects at decreasing TP3 now
+
+checkTF <- function(.tf, .cer_clust, .par_clust, .parents_or_hybrid = "parents",
+                    .show_wt = TRUE, .show_tfdel = TRUE,
+                    .show_points_wt = TRUE, .show_points_tfdel = TRUE,
                     .plotlims = NULL, .normalization = "log2") {
   gene_idxs <- finaldf |> filter(experiment == "LowN" &
-                                   group == .group) |> 
+                                   cer == .cer_clust &
+                                   par == .par_clust) |> 
     select(gene_name) |> pull()
   if (.parents_or_hybrid == "parents") {
     cer_wt_cols <- which(sample_info_tfdel$genotype == "WT" & sample_info_tfdel$allele == "cer")
     par_wt_cols <- which(sample_info_tfdel$genotype == "WT" & sample_info_tfdel$allele == "par")
     cer_tfdel_cols <- which(sample_info_tfdel$genotype == paste0(.tf, "delete") & sample_info_tfdel$allele == "cer")
     par_tfdel_cols <- which(sample_info_tfdel$genotype == paste0(.tf, "delete") & sample_info_tfdel$allele == "par")
+    # return(list(.cts1 = counts_tfdel[gene_idxs, cer_wt_cols],
+    #             .cts2 = counts_tfdel[gene_idxs, par_wt_cols],
+    #             .cts3 = counts_tfdel[gene_idxs, cer_tfdel_cols],
+    #             .cts4 = counts_tfdel[gene_idxs, par_tfdel_cols],
+    #             .info1 = sample_info_tfdel[cer_wt_cols,],
+    #             .info2 = sample_info_tfdel[par_wt_cols,],
+    #             .info3 = sample_info_tfdel[cer_tfdel_cols,],
+    #             .info4 = sample_info_tfdel[par_tfdel_cols,]))
     p <- plotExpressionProfileTFdel(.cts1 = counts_tfdel[gene_idxs, cer_wt_cols],
                                     .cts2 = counts_tfdel[gene_idxs, par_wt_cols],
                                     .cts3 = counts_tfdel[gene_idxs, cer_tfdel_cols],
@@ -26,8 +793,8 @@ checkTF <- function(.tf, .group, .parents_or_hybrid = "parents",
                                     .info3 = sample_info_tfdel[cer_tfdel_cols,],
                                     .info4 = sample_info_tfdel[par_tfdel_cols,],
                                     .normalization = .normalization,
-                                    .show_points_wt = TRUE,
-                                    .show_points_tfdel = TRUE,
+                                    .show_points_wt = .show_points_wt,
+                                    .show_points_tfdel = .show_points_tfdel,
                                     .show_wt = .show_wt,
                                     .show_tfdel = .show_tfdel,
                                     .show_lines_tfdel = TRUE,
@@ -45,10 +812,10 @@ checkTF <- function(.tf, .group, .parents_or_hybrid = "parents",
                                     .info1 = sample_info_tfdel_allele[cer_wt_cols,],
                                     .info2 = sample_info_tfdel_allele[par_wt_cols,],
                                     .info3 = sample_info_tfdel_allele[cer_tfdel_cols,],
-                                    .info4 = sample_info_tfdel[par_tfdel_cols,],
+                                    .info4 = sample_info_tfdel_allele[par_tfdel_cols,],
                                     .normalization = .normalization,
-                                    .show_points_wt = TRUE,
-                                    .show_points_tfdel = TRUE,
+                                    .show_points_wt = .show_points_wt,
+                                    .show_points_tfdel = .show_points_tfdel,
                                     .show_wt = .show_wt,
                                     .show_tfdel = .show_tfdel,
                                     .show_lines_tfdel = TRUE,
@@ -56,13 +823,607 @@ checkTF <- function(.tf, .group, .parents_or_hybrid = "parents",
   }
   return(p)
 }
-# tests for checkTF
-random_tf <- sample(TFnames, size = 1)
-annotate_figure(checkTF(.tf = random_tf, .group = "dyn21"), top = random_tf)
-annotate_figure(checkTF(.tf = random_tf, .group = "dyn21", .parents_or_hybrid = "hybrid"), top = random_tf)
+# # tests for checkTF
+# random_tf <- sample(TFnames, size = 1)
+# annotate_figure(checkTF(.tf = random_tf, .cer_clust = 2, .par_clust = 1), top = random_tf)
+# annotate_figure(checkTF(.tf = random_tf, .cer_clust = 2, .par_clust = 1, .parents_or_hybrid = "hybrid"), top = random_tf)
 
-#### plotting TFdels vs WT in each divergence group ####
-filter(finaldf, experiment == "LowN") |> select(group) |> table() |> sort(decreasing = TRUE)
+#### Are TFdel effects on single genes in the same direction as mean? ####
+tfgenedf <- left_join(TFdeldf, filter(finaldf, experiment == "LowN"),
+                      by = "gene_name") |> 
+  filter(timepoint != "TP2" & organism %in% c("cer", "par")) |> 
+  drop_na() |> 
+  mutate(x_axis_cer = interaction(timepoint, cer),
+         x_axis_par = interaction(timepoint, par),
+         clust = if_else(organism == "cer",
+                         true = cer, false = par))
+tfgenedf$tfdel_mean <- if_else(tfgenedf$padj < p_thresh,
+                               true = tfgenedf$basemean*(2^tfgenedf$lfc),
+                               false = tfgenedf$basemean)
+tfgenedf <- quantdf |> 
+  filter(time_point_str != "1 h, low N") |> 
+  mutate(timepoint = if_else(time_point_str == "0 h, YPD",
+                             true = "TP1", false = "TP3")) |> 
+  right_join(y = tfgenedf,
+             by = c("tf"="deletion", 
+                    "organism", 
+                    "timepoint", 
+                    "clust"))
+
+# for any given TF deletion ,
+# shows how many genes are affected in each cluster/timepoint/species
+plotTFdelVectors <- function(.data, .tf, .n_downsample = 0) {
+  plotdf_cer <- filter(.data, organism == "cer" & tf == .tf)
+  plotdf_par <- filter(.data, organism == "par" & tf == .tf)
+  sig_data_cer <- filter(.data, organism == "cer" & padj < p_thresh & tf == .tf) 
+  sig_data_par <- filter(.data, organism == "par" & padj < p_thresh & tf == .tf) 
+  nonsig_data_cer <- filter(.data, organism == "cer" & padj >= p_thresh & tf == .tf) 
+  nonsig_data_par <- filter(.data, organism == "par" & padj >= p_thresh & tf == .tf) 
+  if (.n_downsample != 0) {
+    sig_data_cer <- sig_data_cer |> slice_sample(n = .n_downsample) 
+    sig_data_par <- sig_data_par |> slice_sample(n = .n_downsample) 
+  }
+  clust_up_list <- quantdf |> filter(time_point_str != "1 h, low N" &
+                                       organism %in% c("cer", "par")) |> 
+    mutate(timepoint = if_else(time_point_str == "16 h, low N",
+                               true = "TP3", false = "TP1")) |> 
+    filter(tf == .tf & mean_dir == "tfdel_high") |> 
+    select(organism, clust, timepoint) |> 
+    apply(MARGIN = 1, FUN = \(x) {
+      paste0(x["organism"], x["clust"], x["timepoint"])
+    })
+  clust_down_list <- quantdf |> filter(time_point_str != "1 h, low N" &
+                                       organism %in% c("cer", "par")) |> 
+    mutate(timepoint = if_else(time_point_str == "16 h, low N",
+                               true = "TP3", false = "TP1")) |> 
+    filter(tf == .tf & mean_dir == "tfdel_low") |> 
+    select(organism, clust, timepoint) |> 
+    apply(MARGIN = 1, FUN = \(x) {
+      paste0(x["organism"], x["clust"], x["timepoint"])
+    })
+  p_cer <- ggplot() + 
+    geom_point(data = nonsig_data_cer,
+               aes(x = x_axis_cer, y = log2(basemean)),
+               color = "grey",
+               alpha = 0.1,
+               position = position_jitter(seed = 1, width = 0.4)) +
+    geom_point(data = sig_data_cer,
+               aes(x = x_axis_cer, y = log2(basemean),
+                   color = lfc > 0),
+               position = position_jitter(seed = 1, width = 0.4),
+               alpha = 0.5) +
+    geom_segment(data = sig_data_cer,
+                 aes(x = x_axis_cer, y = log2(basemean),
+                     xend = x_axis_cer, yend = log2(tfdel_mean),
+                     color = lfc > 0), 
+                 position = position_jitter(seed = 1, width = 0.4),
+                 arrow = arrow(length = unit(0.2, "cm"), type = "closed"),
+                 alpha = 0.5) +
+    geom_text(data = summarise(group_by(plotdf_cer, x_axis_cer),
+                               n_up = sum((padj < p_thresh) & (lfc > 0)),
+                               n_down = sum((padj < p_thresh) & (lfc < 0)),
+                               n_genes = n()), 
+              aes(label = paste0(round(n_up/n_genes, digits = 4)*100, " % up\n",
+                                 round(n_down/n_genes, digits = 4)*100, " % down\n",
+                                 n_genes, " genes"),
+                  y = 16, x = x_axis_cer)) +
+    ylim(c(0, 19)) +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+    xlab("") +
+    ylab("Scer\nexpression (log2 scale)")
+  
+  p_par <- ggplot() + 
+    geom_point(data = nonsig_data_par,
+               aes(x = x_axis_par, y = log2(basemean)),
+               color = "grey",
+               alpha = 0.1,
+               position = position_jitter(seed = 1, width = 0.4)) +
+    geom_point(data = sig_data_par,
+               aes(x = x_axis_par, y = log2(basemean),
+                   color = lfc > 0),
+               position = position_jitter(seed = 1, width = 0.4),
+               alpha = 0.5) +
+    geom_segment(data = sig_data_par,
+                 aes(x = x_axis_par, y = log2(basemean),
+                     xend = x_axis_par, yend = log2(tfdel_mean),
+                     color = lfc > 0), 
+                 position = position_jitter(seed = 1, width = 0.4),
+                 arrow = arrow(length = unit(0.2, "cm"), type = "closed"),
+                 alpha = 0.5) +
+    geom_text(data = summarise(group_by(plotdf_par, x_axis_par),
+                               n_up = sum((padj < p_thresh) & (lfc > 0)),
+                               n_down = sum((padj < p_thresh) & (lfc < 0)),
+                               n_genes = n()), 
+              aes(label = paste0(round(n_up/n_genes, digits = 4)*100, " % up\n",
+                                 round(n_down/n_genes, digits = 4)*100, " % down\n",
+                                 n_genes, " genes"),
+                  y = 16, x = x_axis_par)) +
+    ylim(c(0, 19)) +
+    theme_classic() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+    xlab("") +
+    ylab("Spar\nexpression (log2 scale)")
+  annotate_figure(ggarrange(p_cer, p_par, ncol = 1, nrow = 2, common.legend = TRUE),
+                  top = purrr::reduce(c(.tf, "\ncluster up:", clust_up_list, 
+                                        "\ncluster down:", clust_down_list),
+                                      .f = paste))
+}
+# tests for plotTFdelVectors
+# random effect
+testdf <- quantdf |> filter(mean_dir != "none" &
+                              organism %in% c("cer", "par")) |> 
+  slice_sample(n = 1) |> 
+  select(tf, organism, time_point_str, mean_dir, clust)
+# is the other organism/timepoint affected?
+quantdf |> filter(tf == testdf$tf & 
+                    organism %in% c("cer", "par") &
+                    clust != 0) |> 
+  select(tf, organism, time_point_str, clust, mean_dir)
+# conserved
+checkTF(.tf = testdf$tf, .cer_clust = 1, .par_clust = 1, .normalization = "scale")
+checkTF(.tf = testdf$tf, .cer_clust = 2, .par_clust = 2, .normalization = "scale")
+# diverged
+checkTF(.tf = testdf$tf, .cer_clust = 1, .par_clust = 2, .normalization = "scale")
+checkTF(.tf = testdf$tf, .cer_clust = 2, .par_clust = 1, .normalization = "scale")
+# what do single genes look like?
+plotTFdelVectors(tfgenedf, .tf = testdf$tf) # parents only
+
+
+
+
+
+
+for (tf in TFnames) {
+  pdf(file = paste0("../../aligning_the_molecular_phenotype/paper_figures/Supplement/vectors_",
+                    tf, ".pdf"),
+      width = 7, height = 10)
+  print(plotTFdelVectors(tfgenedf, .tf = tf))
+  dev.off()
+}
+
+### How many genes are affected in each mean shift? Just to have a number
+plotdf <- tfgenedf |> group_by(tf, organism, timepoint, mean_dir, clust) |> 
+  summarise(n_up = sum(lfc > 0 & padj < p_thresh),
+            n_down = sum(lfc < 0 & padj < p_thresh),
+            n_nonsig = sum(padj >= p_thresh)) |> 
+  ungroup() |> 
+  drop_na() |> # NAs come from deletions/timepoints where one organism was missing replicates
+  mutate(pct_up = (n_up/(n_up + n_down + n_nonsig))*100,
+         pct_down = (n_down/(n_up + n_down + n_nonsig))*100)
+# quick plots of how many genes go up or down in each mean direction
+# all groups
+ggplot(plotdf, aes(x = pct_up, y = pct_down)) +
+  geom_point(aes(color = mean_dir))
+# limiting to pct_up/down < 5%
+ggplot(plotdf, aes(x = pct_up, y = pct_down)) +
+  geom_point(aes(color = mean_dir)) +
+  xlim(c(0, 5)) +
+  ylim(c(0, 5))
+# average for each mean direction category
+plotdf |> group_by(mean_dir) |> 
+  summarise(mean_pct_up = mean(pct_up),
+            mean_pct_down = mean(pct_down))
+
+#### Var reduction barplots ####
+tfdf <- left_join(TFdeldf,
+                  y = finaldf |> filter(experiment == "LowN") |> # change experiment to check different diverging portions
+                    select(gene_name, cer, par, hyc, hyp, dynamics),
+                  by = "gene_name") |>
+  drop_na() |> 
+  filter(padj < p_thresh & timepoint != "TP2") |> 
+  mutate(clust = if_else(organism == "cer",
+                         true = cer,
+                         false = if_else(organism == "par",
+                                         true = par,
+                                         false = if_else(organism == "hyc",
+                                                         true = hyc,
+                                                         false = hyp))))
+# polarizing so direction of var reduction is always a positive lfc
+polarizeLFC <- function(.clust, .timepoint, .lfc) {
+  if (.clust == 1) {
+    if (.timepoint == "TP1") {
+      return(as.numeric(.lfc))
+    }
+    if (.timepoint == "TP3") {
+      return(-.lfc)
+    }
+  }
+  if (.clust == 2) {
+    if (.timepoint == "TP1") {
+      return(-as.numeric(.lfc))
+    }
+    if (.timepoint == "TP3") {
+      return(.lfc)
+    }
+  }
+  if (.clust == 0) {
+    return(0)
+  }
+}
+tfdf$polarized_lfc <- apply(tfdf, 1, \(x) {
+  polarizeLFC(.clust = as.numeric(x["clust"]),
+              .timepoint = as.character(x["timepoint"]),
+              .lfc = as.numeric(x["lfc"]))
+}) |> unlist()
+# barplot
+plotdf <- tfdf |>  
+  drop_na() |> 
+  filter(organism %in% c("cer", "par")) |> 
+  group_by(organism, timepoint, deletion) |> 
+  summarise(ngenes = n(),
+            increase = sum(polarized_lfc < 0),
+            decrease = sum(polarized_lfc > 0)) |> 
+  pivot_longer(cols = c("increase", "decrease"),
+               names_to = "increase_or_decrease", values_to = "n")
+ggplot(plotdf, aes(x = interaction(organism, timepoint, deletion),
+                   y = if_else(increase_or_decrease == "increase",
+                               true = n,
+                               false = -n))) +
+  geom_col(aes(fill = increase_or_decrease)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+# QC: Are those samples where there suddenly aren't any DE genes even though other
+# samples of that TF have a lot real? Or an artifact of DESeq having less power?
+# If it's real, the lfc estimates will also be lower for those samples
+# Example: MET28, no DE genes in Scer TP1
+ggplot(filter(TFdeldf, deletion == "MET28"),
+       aes(x = interaction(timepoint, organism),
+           y = lfc, fill = lfc < 0)) +
+  geom_violin() # it legitamitely has lower lfc estimates for Scer TP1
+filter(TFdeldf, deletion == "MET28") |> group_by(organism, timepoint) |> 
+  summarise(avg_lfc_mag = mean(abs(lfc))) |> 
+  arrange(avg_lfc_mag) # very obvious by comparing means
+# Example 2: GAT1, Scer TP3 has waay more DE than Scer TP1
+ggplot(filter(TFdeldf, deletion == "GAT1"),
+       aes(x = interaction(timepoint, organism),
+           y = lfc, fill = lfc < 0)) +
+  geom_violin() # not as visually convincing
+filter(TFdeldf, deletion == "GAT1") |> group_by(organism, timepoint) |> 
+  summarise(avg_lfc_mag = mean(abs(lfc))) |> 
+  arrange(avg_lfc_mag) # But Scer TP1 is still the lowest mean
+# Example 3: URE2, not DE in Spar TP3
+ggplot(filter(TFdeldf, deletion == "URE2"),
+       aes(x = interaction(timepoint, organism),
+           y = lfc, fill = lfc < 0)) +
+  geom_violin()
+filter(TFdeldf, deletion == "URE2") |> group_by(organism, timepoint) |> 
+  summarise(avg_lfc_mag = mean(abs(lfc))) |> 
+  arrange(avg_lfc_mag)
+# conclusion: not just power, lfc estimates also lower
+
+# TODO: while this does show some really dramatic differences for certain TFs
+# It doesn't show how many genes are only responding in one species or the other
+# It should be pretty easy to label each gene that way and group the
+# x axis by cer_unique, par_unique, and both
+
+#### Many TF deletions cause reduction in variation ####
+# We've established that whether or not a TFdel affects a cluster
+# is variable, but when it does, it tends to cause the
+# same effect---a reduction in variation across timepoints
+checkTFs <- function(.cer_clust = c(0, 1, 2), 
+                     .par_clust = c(0, 1, 2), 
+                     .dynamics = c("conserved", "diverged"),
+                     .parents_or_hybrid = "parents",
+                     .allele = c("cer", "par"),
+                     .normalization = "scale",
+                     .tfs = TFnames,
+                     .ylims = NULL,
+                     .ylab = FALSE,
+                     .omit_1h_timepoint = TRUE) {
+  if (.allele == "cer") {
+    .color1 <- "orange1"
+    .color2 <- "grey20"
+  }
+  if (.allele == "par") {
+    .color1 <- "blue2"
+    .color2 <- "grey20"
+  }
+  tfdel_genotypes <- paste0(.tfs, "delete")
+  if (.parents_or_hybrid == "parents") {
+    gene_idxs <- finaldf |> filter(experiment == "LowN" &
+                                     cer %in% .cer_clust &
+                                     par %in% .par_clust &
+                                     dynamics %in% .dynamics) |> 
+      select(gene_name) |> pull()
+    if (.omit_1h_timepoint) {
+      info_cols <- (sample_info_tfdel$allele == .allele) & 
+        (sample_info_tfdel$genotype %in% c("WT", tfdel_genotypes)) &
+        (sample_info_tfdel$time_point_num != 60)
+    }
+    if (!.omit_1h_timepoint) {
+      info_cols <- (sample_info_tfdel$allele == .allele) & 
+        (sample_info_tfdel$genotype %in% c("WT", tfdel_genotypes))
+    }
+    p <- plotExpressionProfileTFdels(.cts = counts_tfdel[gene_idxs, info_cols],
+                                     .info = sample_info_tfdel[info_cols,],
+                                     .color1 = .color1,
+                                     .color2 = .color2,
+                                     .normalization = .normalization,
+                                     .ylims = .ylims,
+                                     .ylab = .ylab)
+  }
+  if (.parents_or_hybrid == "hybrid") {
+    gene_idxs <- finaldf |> filter(experiment == "LowN" &
+                                     hyc %in% .cer_clust &
+                                     hyp %in% .par_clust &
+                                     dynamics %in% .dynamics) |> 
+      select(gene_name) |> pull()
+    if (.omit_1h_timepoint) {
+      info_cols <- (sample_info_tfdel_allele$allele == .allele) & 
+        (sample_info_tfdel_allele$genotype %in% c("WT", tfdel_genotypes)) &
+        (sample_info_tfdel_allele$time_point_num != 60)
+    }
+    if (!.omit_1h_timepoint) {
+      info_cols <- (sample_info_tfdel_allele$allele == .allele) & 
+        (sample_info_tfdel_allele$genotype %in% c("WT", tfdel_genotypes))
+    }
+    p <- plotExpressionProfileTFdels(.cts = counts_tfdel_allele[gene_idxs, info_cols],
+                                     .info = sample_info_tfdel_allele[info_cols,],
+                                     .color1 = .color1,
+                                     .color2 = .color2,
+                                     .normalization = .normalization,
+                                     .ylims = .ylims,
+                                     .ylab = .ylab)
+  }
+  return(p)
+}
+# Tests for checkTFs
+# checkTFs(2, 2, .allele = "cer")
+# checkTFs(1, 1, .allele = "cer")
+# checkTFs(2, 2, .allele = "par")
+# checkTFs(1, 1, .allele = "par")
+# test_tfs <- quantdf |> filter(cer_clust == 1 & par_clust == 1 &
+#                                 organism == "cer" &
+#                                 mean_dir != "none") |> 
+#   select(tf) |> pull()
+# checkTFs(1, 1, .allele = "cer", .tfs = test_tfs, .normalization = "log2")
+# test_tfs <- quantdf |> filter(par_clust == 1 &
+#                                 dynamics == "conserved" &
+#                                 organism == "par" &
+#                                 mean_dir != "none") |>
+#   select(tf) |> pull()
+# checkTFs(1, 1, .allele = "par", 
+#          .tfs = test_tfs, .normalization = "log2")
+
+# generating plots, parents
+plotlist <- vector(mode = "list", length = 0)
+ylims <- c(-1.1, 1.1)
+norm_type <- "scale"
+for (clust in c(0, 1, 2)) {
+  if (clust == 0) {
+    cat(clust, "conserved and diverged\n")
+    # cer
+    tfs <- quantdf |> filter(clust == clust &
+                               organism == "cer" &
+                               mean_dir != "none" &
+                               time_point_str != "1 h, low N") |> 
+      select(tf) |> pull()
+    plotlist[[paste("conserved_and_diverged", clust, "cer", sep = "_")]] <- checkTFs(.cer_clust = clust, .allele = "cer",
+                                                                                     .tfs = tfs, .normalization = norm_type,
+                                                                                     .ylims = ylims)
+    # par
+    tfs <- quantdf |> filter(clust == clust & 
+                               organism == "par" &
+                               mean_dir != "none" &
+                               time_point_str != "1 h, low N") |> 
+      select(tf) |> pull()
+    plotlist[[paste("conserved_and_diverged", clust, "par", sep = "_")]] <- checkTFs(.par_clust = clust, .allele = "par",
+                                                                                     .tfs = tfs, .normalization = norm_type,
+                                                                                     .ylims = ylims)
+  }
+  else {
+    for (dyn in c("conserved", "diverged")) {
+      cat(paste0(clust, dyn), "\n")
+      # cer
+      tfs <- quantdf |> filter(clust == clust & 
+                                 organism == "cer" &
+                                 mean_dir != "none" &
+                                 time_point_str != "1 h, low N") |> 
+        select(tf) |> pull()
+      plotlist[[paste(dyn, clust, "cer", sep = "_")]] <- checkTFs(.cer_clust = clust, 
+                                                                  .dynamics = dyn, .allele = "cer",
+                                                                  .tfs = tfs, .normalization = norm_type,
+                                                                  .ylims = ylims)
+      # par
+      tfs <- quantdf |> filter(clust == clust & 
+                                 organism == "par" &
+                                 mean_dir != "none" &
+                                 time_point_str != "1 h, low N") |> 
+        select(tf) |> pull()
+      plotlist[[paste(dyn, clust, "par", sep = "_")]] <- checkTFs(.par_clust = clust,
+                                                                  .dynamics = dyn, .allele = "par",
+                                                                  .tfs = tfs, .normalization = norm_type,
+                                                                  .ylims = ylims)
+    }
+  }
+}
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/var_reduction.pdf",
+    width = 12, height = 4)
+ggarrange(plotlist$conserved_1_cer,
+          plotlist$conserved_2_cer,
+          plotlist$diverged_1_cer,
+          plotlist$diverged_2_cer,
+          plotlist$conserved_and_diverged_0_cer,
+          plotlist$conserved_1_par,
+          plotlist$conserved_2_par,
+          plotlist$diverged_1_par,
+          plotlist$diverged_2_par,
+          plotlist$conserved_and_diverged_0_par,
+          nrow = 2, ncol = 5)
+dev.off()
+
+# generating plots, hybrid
+plotlist <- vector(mode = "list", length = 0)
+ylims <- c(-1.1, 1.1)
+norm_type <- "scale"
+for (clust in c(0, 1, 2)) {
+  if (clust == 0) {
+    cat(paste(clust, "conserved and diverged"), "\n")
+    # cer allele
+    tfs <- quantdf |> filter(clust == clust &
+                               organism == "hyc" &
+                               mean_dir != "none" &
+                               time_point_str != "1 h, low N") |> 
+      select(tf) |> pull()
+    plotlist[[paste("conserved_and_diverged", clust, "hyc", sep = "_")]] <- checkTFs(.cer_clust = clust, .allele = "cer",
+                                                                                     .tfs = tfs, .normalization = norm_type,
+                                                                                     .ylims = ylims, .parents_or_hybrid = "hybrid")
+    # par allele
+    tfs <- quantdf |> filter(clust == clust & 
+                               organism == "hyp" &
+                               mean_dir != "none" &
+                               time_point_str != "1 h, low N") |> 
+      select(tf) |> pull()
+    plotlist[[paste("conserved_and_diverged", clust, "hyp", sep = "_")]] <- checkTFs(.par_clust = clust, .allele = "par",
+                                                                                     .tfs = tfs, .normalization = norm_type,
+                                                                                     .ylims = ylims, .parents_or_hybrid = "hybrid")
+  }
+  else {
+    for (dyn in c("conserved", "diverged")) {
+      cat(paste(clust, dyn), "\n")
+      # cer allele
+      tfs <- quantdf |> filter(clust == clust & 
+                                 organism == "hyc" &
+                                 mean_dir != "none" &
+                                 time_point_str != "1 h, low N") |> 
+        select(tf) |> pull()
+      plotlist[[paste(dyn, clust, "hyc", sep = "_")]] <- checkTFs(.cer_clust = clust, 
+                                                                  .dynamics = dyn, .allele = "cer",
+                                                                  .tfs = tfs, .normalization = norm_type,
+                                                                  .ylims = ylims, .parents_or_hybrid = "hybrid")
+      # par
+      tfs <- quantdf |> filter(clust == clust & 
+                                 organism == "hyp" &
+                                 mean_dir != "none" &
+                                 time_point_str != "1 h, low N") |> 
+        select(tf) |> pull()
+      plotlist[[paste(dyn, clust, "hyp", sep = "_")]] <- checkTFs(.par_clust = clust,
+                                                                  .dynamics = dyn, .allele = "par",
+                                                                  .tfs = tfs, .normalization = norm_type,
+                                                                  .ylims = ylims, .parents_or_hybrid = "hybrid")
+    }
+  }
+}
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/var_reduction_hybrid.pdf",
+    width = 12, height = 4)
+ggarrange(plotlist$conserved_1_hyc,
+          plotlist$conserved_2_hyc,
+          plotlist$diverged_1_hyc,
+          plotlist$diverged_2_hyc,
+          plotlist$conserved_and_diverged_0_hyc,
+          plotlist$conserved_1_hyp,
+          plotlist$conserved_2_hyp,
+          plotlist$diverged_1_hyp,
+          plotlist$diverged_2_hyp,
+          plotlist$conserved_and_diverged_0_hyp,
+          nrow = 2, ncol = 5)
+dev.off()
+
+#### Do single genes also show reduction in variation? ####
+# table of how much genes went up or down in each cluster/timepoint
+tfgenedf |> filter(mean_dir != "none" &
+                     padj < p_thresh) |> 
+  group_by(organism, timepoint, clust) |> 
+  summarise(n_up = sum(lfc > 0),
+            n_down = sum(lfc < 0)) # yes
+
+# hybrids only show var reduction in cluster 2 TP1:
+tfgenedf_hybrid <- left_join(TFdeldf, filter(finaldf, experiment == "LowN"),
+                             by = "gene_name") |> 
+  filter(timepoint != "TP2" & organism %in% c("hyc", "hyp")) |> 
+  drop_na() |> 
+  mutate(x_axis_cer = interaction(timepoint, cer),
+         x_axis_par = interaction(timepoint, par),
+         clust = if_else(organism == "hyc",
+                         true = cer, false = par))
+tfgenedf_hybrid$tfdel_mean <- if_else(tfgenedf_hybrid$padj < p_thresh,
+                                      true = tfgenedf_hybrid$basemean*(2^tfgenedf_hybrid$lfc),
+                                      false = tfgenedf_hybrid$basemean)
+tfgenedf_hybrid <- quantdf |> 
+  filter(time_point_str != "1 h, low N") |> 
+  mutate(timepoint = if_else(time_point_str == "0 h, YPD",
+                             true = "TP1", false = "TP3")) |> 
+  right_join(y = tfgenedf_hybrid,
+             by = c("tf"="deletion", 
+                    "organism", 
+                    "timepoint", 
+                    "clust"))
+tfgenedf_hybrid |> filter(mean_dir != "none" &
+                            padj < p_thresh) |> 
+  group_by(organism, timepoint, clust) |> 
+  summarise(n_up = sum(lfc > 0),
+            n_down = sum(lfc < 0))
+
+# TODO: range is too far from data, just count how many
+# raise vs lower expression at TP1 increasing (more probably raise)
+# versus TP3 increasing (more probably lower), versus decreasing
+# cluster which should have the opposite effect
+
+# compare range of basemeans to range of tfdel_means of each gene
+# in each organism, for each tf flagged as affecting mean in quantdf
+plotRanges <- function(.org, .clust) {
+  tfs <- quantdf |> filter(clust == .clust &
+                             organism == .org &
+                             mean_dir != "none" &
+                             time_point_str != "1 h, low N") |> 
+    select(tf) |> pull() |> unique()
+  genes <- tfgenedf |> filter(clust == .clust &
+                                organism == .org &
+                                padj < p_thresh) |> 
+    select(gene_name) |> pull() |> unique()
+  plotdf <- tfgenedf |> 
+    filter(organism == .org & tf %in% tfs & clust == .clust &
+             gene_name %in% genes) |> 
+    pivot_wider(id_cols = c("gene_name", "tf"), 
+                values_from = c("basemean", "tfdel_mean"),
+                names_from = "timepoint") |> 
+    mutate(base_range = abs(basemean_TP1 - basemean_TP3),
+           tfdel_range = abs(tfdel_mean_TP1 - tfdel_mean_TP3)) |>
+    mutate(higher_tfdel_var = base_range < tfdel_range) |> 
+    filter(base_range != tfdel_range) |> 
+    pivot_longer(cols = c("base_range", "tfdel_range"),
+                 names_to = "genotype", values_to = "range")
+  ggplot(plotdf, aes(x = genotype, y = log2(range))) +
+    geom_line(aes(group = interaction(gene_name, tf),
+                  color = higher_tfdel_var)) +
+    ggtitle(paste("increase var upon TFdel:", sum(plotdf$higher_tfdel_var),
+                  "\ndecrease var upon TFdel:", sum(!plotdf$higher_tfdel_var)))
+}
+# cer 0
+plotRanges("cer", 0)
+# cer 1
+plotRanges("cer", 1)
+# cer 2
+plotRanges("cer", 2)
+# par 0
+plotRanges("par", 0)
+# par 1
+plotRanges("par", 1)
+# par 2
+plotRanges("par", 2)
+
+#### Supplement: cluster average expression for individual TF deletions ####
+### All cluster combos in parents, 4 columns
+plotlist <- vector(mode = "list", length = 0)
+for (tf in sort(TFnames, decreasing = FALSE)) {
+  for (cer_clust in c(1, 2)) {
+    for (par_clust in c(1, 2)) {
+      plotlist[[paste(tf, cer_clust, par_clust, sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .cer_clust = cer_clust, 
+                                                                                        .par_clust = par_clust, 
+                                                                                        .parents_or_hybrid = "parents", 
+                                                                                        .normalization = "log2"),
+                                                                                        top = paste(tf, cer_clust, par_clust))
+    }
+  }
+}
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/all_clusters_parents_unscaled.pdf",
+    width = 9, height = ceiling(length(plotlist)/4)*2)
+ggarrange(plotlist = plotlist, ncol = 4, nrow = ceiling(length(plotlist)/4),
+          common.legend = TRUE)
+dev.off()
+
+# each cluster combo, parents and hybrids
 ### dynamics divergers 2-1
 # what are the 2-1 genes doing in other environments?
 groupdf <- finaldf |> pivot_longer(cols = c("cer", "par"),
@@ -73,17 +1434,17 @@ groupdf <- finaldf |> pivot_longer(cols = c("cer", "par"),
               names_from = c("experiment"))
 groupdf |> filter((allele == "cer" & LowN == 2) |
                     (allele == "par" & LowN == 1)) |> 
-  group_by(allele, CC, HAP4, LowPi, Heat, Cold) |> 
+  group_by(allele, LowN, HAP4, CC, LowPi, Heat, Cold) |> 
   summarise(count = n()) |> arrange(desc(count))
 # collecting plots
 plotlist <- vector(mode = "list", length = length(TFnames)*2)
 names(plotlist) <- c(paste(TFnames, "parents", sep = "_"),
                      paste(TFnames, "hybrid", sep = "_")) |> sort(decreasing = TRUE)
 for (tf in TFnames) {
-  plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "dyn21", .parents_or_hybrid = "parents"), top = tf)
-  plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "dyn21", .parents_or_hybrid = "hybrid"), top = tf)
+  plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .cer_clust = 2, .par_clust = 1, .parents_or_hybrid = "parents", .plotlims = c(-0.5, 0.5)), top = tf)
+  plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .cer_clust = 2, .par_clust = 1, .parents_or_hybrid = "hybrid", .plotlims = c(-0.5, 0.5)), top = tf)
 }
-pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/dyn21.pdf",
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/21.pdf",
     width = 9, height = ceiling(length(plotlist)/2)*4)
 ggarrange(plotlist = plotlist, ncol = 2, nrow = ceiling(length(plotlist)/2),
           common.legend = TRUE)
@@ -93,68 +1454,534 @@ plotlist <- vector(mode = "list", length = length(TFnames)*2)
 names(plotlist) <- c(paste(TFnames, "parents", sep = "_"),
                      paste(TFnames, "hybrid", sep = "_")) |> sort(decreasing = TRUE)
 for (tf in TFnames) {
-  plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "dyn12", .parents_or_hybrid = "parents"), top = tf)
-  plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "dyn12", .parents_or_hybrid = "hybrid"), top = tf)
+  plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .cer_clust = 1, .par_clust = 2, .parents_or_hybrid = "parents", .plotlims = c(-0.5, 0.5)), top = tf)
+  plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .cer_clust = 1, .par_clust = 2, .parents_or_hybrid = "hybrid", .plotlims = c(-0.5, 0.5)), top = tf)
 }
-pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/dyn12.pdf",
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/12.pdf",
     width = 9, height = ceiling(length(plotlist)/2)*4)
 ggarrange(plotlist = plotlist, ncol = 2, nrow = ceiling(length(plotlist)/2),
           common.legend = TRUE)
 dev.off()
-### level plots
-# levuppar1
+# conserved 1-1
 plotlist <- vector(mode = "list", length = length(TFnames)*2)
 names(plotlist) <- c(paste(TFnames, "parents", sep = "_"),
                      paste(TFnames, "hybrid", sep = "_")) |> sort(decreasing = TRUE)
 for (tf in TFnames) {
-  plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levuppar1", .parents_or_hybrid = "parents"), top = tf)
-  plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levuppar1", .parents_or_hybrid = "hybrid"), top = tf)
+  plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .cer_clust = 1, .par_clust = 1, .parents_or_hybrid = "parents"), top = tf)
+  plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .cer_clust = 1, .par_clust = 1, .parents_or_hybrid = "hybrid"), top = tf)
 }
-pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/levuppar1.pdf",
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/11.pdf",
     width = 9, height = ceiling(length(plotlist)/2)*4)
 ggarrange(plotlist = plotlist, ncol = 2, nrow = ceiling(length(plotlist)/2),
           common.legend = TRUE)
 dev.off()
-# levuppar2
+# conserved 2-2
 plotlist <- vector(mode = "list", length = length(TFnames)*2)
 names(plotlist) <- c(paste(TFnames, "parents", sep = "_"),
                      paste(TFnames, "hybrid", sep = "_")) |> sort(decreasing = TRUE)
 for (tf in TFnames) {
-  plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levuppar2", .parents_or_hybrid = "parents"), top = tf)
-  plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levuppar2", .parents_or_hybrid = "hybrid"), top = tf)
+  plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .cer_clust = 2, .par_clust = 2, .parents_or_hybrid = "parents"), top = tf)
+  plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .cer_clust = 2, .par_clust = 2, .parents_or_hybrid = "hybrid"), top = tf)
 }
-pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/levuppar2.pdf",
-    width = 9, height = ceiling(length(plotlist)/2)*4)
-ggarrange(plotlist = plotlist, ncol = 2, nrow = ceiling(length(plotlist)/2),
-          common.legend = TRUE)
-dev.off()
-# levupcer1
-plotlist <- vector(mode = "list", length = length(TFnames)*2)
-names(plotlist) <- c(paste(TFnames, "parents", sep = "_"),
-                     paste(TFnames, "hybrid", sep = "_")) |> sort(decreasing = TRUE)
-for (tf in TFnames) {
-  plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levupcer1", .parents_or_hybrid = "parents"), top = tf)
-  plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levupcer1", .parents_or_hybrid = "hybrid"), top = tf)
-}
-pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/levupcer1.pdf",
-    width = 9, height = ceiling(length(plotlist)/2)*4)
-ggarrange(plotlist = plotlist, ncol = 2, nrow = ceiling(length(plotlist)/2),
-          common.legend = TRUE)
-dev.off()
-# levupcer2
-plotlist <- vector(mode = "list", length = length(TFnames)*2)
-names(plotlist) <- c(paste(TFnames, "parents", sep = "_"),
-                     paste(TFnames, "hybrid", sep = "_")) |> sort(decreasing = TRUE)
-for (tf in TFnames) {
-  plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levupcer2", .parents_or_hybrid = "parents"), top = tf)
-  plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levupcer2", .parents_or_hybrid = "hybrid"), top = tf)
-}
-pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/levupcer2.pdf",
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/22.pdf",
     width = 9, height = ceiling(length(plotlist)/2)*4)
 ggarrange(plotlist = plotlist, ncol = 2, nrow = ceiling(length(plotlist)/2),
           common.legend = TRUE)
 dev.off()
 
+#### Compare conserved vs diverged for increasing, decreasing, and static shapes ####
+checkCluster <- function(.tf, .clust, .parents_or_hybrid = "parents",
+                    .show_wt = TRUE, .show_tfdel = TRUE, 
+                    .plotlims = NULL, .normalization = "log2") {
+  deletion_name <- paste0(.tf, "delete")
+  gene_idxs_cons <- finaldf |> filter(experiment == "LowN" &
+                                   cer == .clust &
+                                   par == .clust) |> 
+    select(gene_name) |> pull()
+  gene_idxs_div_cer <- finaldf |> filter(experiment == "LowN" &
+                                           cer == .clust &
+                                           par != .clust) |> 
+    select(gene_name) |> pull()
+  gene_idxs_div_par <- finaldf |> filter(experiment == "LowN" &
+                                           cer != .clust &
+                                           par == .clust) |> 
+    select(gene_name) |> pull()
+  if (.parents_or_hybrid == "parents") {
+    # cer plot
+    wt_cols <- which(sample_info_tfdel$genotype == "WT" & sample_info_tfdel$allele == "cer")
+    tfdel_cols <- which(sample_info_tfdel$genotype == deletion_name & sample_info_tfdel$allele == "cer")
+    p_cer <- plotExpressionProfileTFdel(.cts1 = counts_tfdel[gene_idxs_cons, wt_cols], # WT conserved dynamics
+                                    .cts2 = counts_tfdel[gene_idxs_div_cer, wt_cols], # WT diverged dynamics
+                                    .cts3 = counts_tfdel[gene_idxs_cons, tfdel_cols], # TFdel conserved dynamics
+                                    .cts4 = counts_tfdel[gene_idxs_div_cer, tfdel_cols], # TFdel diverged dynamics
+                                    .info1 = sample_info_tfdel[wt_cols,],
+                                    .info2 = sample_info_tfdel[wt_cols,],
+                                    .info3 = sample_info_tfdel[tfdel_cols,],
+                                    .info4 = sample_info_tfdel[tfdel_cols,],
+                                    .color1 = "orange1",
+                                    .color2 = "orange4",
+                                    .color3 = "orange1",
+                                    .color4 = "orange4",
+                                    .normalization = .normalization,
+                                    .show_points_wt = TRUE,
+                                    .show_points_tfdel = TRUE,
+                                    .show_wt = .show_wt,
+                                    .show_tfdel = .show_tfdel,
+                                    .show_lines_tfdel = TRUE,
+                                    .plotlims = .plotlims)
+    # par plot
+    wt_cols <- which(sample_info_tfdel$genotype == "WT" & sample_info_tfdel$allele == "par")
+    tfdel_cols <- which(sample_info_tfdel$genotype == deletion_name & sample_info_tfdel$allele == "par")
+    p_par <- plotExpressionProfileTFdel(.cts1 = counts_tfdel[gene_idxs_cons, wt_cols], # WT conserved dynamics
+                                        .cts2 = counts_tfdel[gene_idxs_div_par, wt_cols], # WT diverged dynamics
+                                        .cts3 = counts_tfdel[gene_idxs_cons, tfdel_cols], # TFdel conserved dynamics
+                                        .cts4 = counts_tfdel[gene_idxs_div_par, tfdel_cols], # TFdel diverged dynamics
+                                        .info1 = sample_info_tfdel[wt_cols,],
+                                        .info2 = sample_info_tfdel[wt_cols,],
+                                        .info3 = sample_info_tfdel[tfdel_cols,],
+                                        .info4 = sample_info_tfdel[tfdel_cols,],
+                                        .color1 = "blue2",
+                                        .color2 = "blue4",
+                                        .color3 = "blue2",
+                                        .color4 = "blue4",
+                                        .normalization = .normalization,
+                                        .show_points_wt = TRUE,
+                                        .show_points_tfdel = TRUE,
+                                        .show_wt = .show_wt,
+                                        .show_tfdel = .show_tfdel,
+                                        .show_lines_tfdel = TRUE,
+                                        .plotlims = .plotlims)
+  }
+  if (.parents_or_hybrid == "hybrid") {
+    # TODO: make this the same as parents above, if it ends up being useful
+    cer_wt_cols <- which(sample_info_tfdel_allele$genotype == "WT" & sample_info_tfdel_allele$allele == "cer")
+    par_wt_cols <- which(sample_info_tfdel_allele$genotype == "WT" & sample_info_tfdel_allele$allele == "par")
+    cer_tfdel_cols <- which(sample_info_tfdel_allele$genotype == paste0(.tf, "delete") & sample_info_tfdel_allele$allele == "cer")
+    par_tfdel_cols <- which(sample_info_tfdel_allele$genotype == paste0(.tf, "delete") & sample_info_tfdel_allele$allele == "par")
+    p <- plotExpressionProfileTFdel(.cts1 = counts_tfdel_allele[gene_idxs, cer_wt_cols],
+                                    .cts2 = counts_tfdel_allele[gene_idxs, par_wt_cols],
+                                    .cts3 = counts_tfdel_allele[gene_idxs, cer_tfdel_cols],
+                                    .cts4 = counts_tfdel_allele[gene_idxs, par_tfdel_cols],
+                                    .info1 = sample_info_tfdel_allele[cer_wt_cols,],
+                                    .info2 = sample_info_tfdel_allele[par_wt_cols,],
+                                    .info3 = sample_info_tfdel_allele[cer_tfdel_cols,],
+                                    .info4 = sample_info_tfdel_allele[par_tfdel_cols,],
+                                    .normalization = .normalization,
+                                    .show_points_wt = TRUE,
+                                    .show_points_tfdel = TRUE,
+                                    .show_wt = .show_wt,
+                                    .show_tfdel = .show_tfdel,
+                                    .show_lines_tfdel = TRUE,
+                                    .plotlims = .plotlims)
+  }
+  return(annotate_figure(ggarrange(p_cer, p_par, nrow = 1, ncol = 2), 
+                         top = .tf))
+}
+# increasing cluster, 1
+plotlist <- vector(mode = "list", length = length(TFnames))
+names(plotlist) <- TFnames
+for (tf in TFnames) {
+  plotlist[[tf]] <- checkCluster(.tf = tf, .clust = 1, .normalization = "scale")
+}
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/1.pdf",
+    width = 9, height = length(plotlist)*4)
+ggarrange(plotlist = plotlist, ncol = 1, nrow = length(plotlist),
+          common.legend = TRUE)
+dev.off()
+# decreasing cluster, 2
+plotlist <- vector(mode = "list", length = length(TFnames))
+names(plotlist) <- TFnames
+for (tf in TFnames) {
+  plotlist[[tf]] <- checkCluster(.tf = tf, .clust = 2, .normalization = "scale")
+}
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/2.pdf",
+    width = 9, height = length(plotlist)*4)
+ggarrange(plotlist = plotlist, ncol = 1, nrow = length(plotlist),
+          common.legend = TRUE)
+dev.off()
+# static cluster, 0
+plotlist <- vector(mode = "list", length = length(TFnames))
+names(plotlist) <- TFnames
+for (tf in TFnames) {
+  plotlist[[tf]] <- checkCluster(.tf = tf, .clust = 0, .normalization = "scale")
+}
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/0.pdf",
+    width = 9, height = length(plotlist)*4)
+ggarrange(plotlist = plotlist, ncol = 1, nrow = length(plotlist),
+          common.legend = TRUE)
+dev.off()
+
+
+####### Probably Archive ####### 
+# ### level plots
+# # levuppar1
+# plotlist <- vector(mode = "list", length = length(TFnames)*2)
+# names(plotlist) <- c(paste(TFnames, "parents", sep = "_"),
+#                      paste(TFnames, "hybrid", sep = "_")) |> sort(decreasing = TRUE)
+# for (tf in TFnames) {
+#   plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levuppar1", .parents_or_hybrid = "parents"), top = tf)
+#   plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levuppar1", .parents_or_hybrid = "hybrid"), top = tf)
+# }
+# pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/levuppar1.pdf",
+#     width = 9, height = ceiling(length(plotlist)/2)*4)
+# ggarrange(plotlist = plotlist, ncol = 2, nrow = ceiling(length(plotlist)/2),
+#           common.legend = TRUE)
+# dev.off()
+# # levuppar2
+# plotlist <- vector(mode = "list", length = length(TFnames)*2)
+# names(plotlist) <- c(paste(TFnames, "parents", sep = "_"),
+#                      paste(TFnames, "hybrid", sep = "_")) |> sort(decreasing = TRUE)
+# for (tf in TFnames) {
+#   plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levuppar2", .parents_or_hybrid = "parents"), top = tf)
+#   plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levuppar2", .parents_or_hybrid = "hybrid"), top = tf)
+# }
+# pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/levuppar2.pdf",
+#     width = 9, height = ceiling(length(plotlist)/2)*4)
+# ggarrange(plotlist = plotlist, ncol = 2, nrow = ceiling(length(plotlist)/2),
+#           common.legend = TRUE)
+# dev.off()
+# # levupcer1
+# plotlist <- vector(mode = "list", length = length(TFnames)*2)
+# names(plotlist) <- c(paste(TFnames, "parents", sep = "_"),
+#                      paste(TFnames, "hybrid", sep = "_")) |> sort(decreasing = TRUE)
+# for (tf in TFnames) {
+#   plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levupcer1", .parents_or_hybrid = "parents"), top = tf)
+#   plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levupcer1", .parents_or_hybrid = "hybrid"), top = tf)
+# }
+# pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/levupcer1.pdf",
+#     width = 9, height = ceiling(length(plotlist)/2)*4)
+# ggarrange(plotlist = plotlist, ncol = 2, nrow = ceiling(length(plotlist)/2),
+#           common.legend = TRUE)
+# dev.off()
+# # levupcer2
+# plotlist <- vector(mode = "list", length = length(TFnames)*2)
+# names(plotlist) <- c(paste(TFnames, "parents", sep = "_"),
+#                      paste(TFnames, "hybrid", sep = "_")) |> sort(decreasing = TRUE)
+# for (tf in TFnames) {
+#   plotlist[[paste(tf, "parents", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levupcer2", .parents_or_hybrid = "parents"), top = tf)
+#   plotlist[[paste(tf, "hybrid", sep = "_")]] <- annotate_figure(checkTF(.tf = tf, .group = "levupcer2", .parents_or_hybrid = "hybrid"), top = tf)
+# }
+# pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/levupcer2.pdf",
+#     width = 9, height = ceiling(length(plotlist)/2)*4)
+# ggarrange(plotlist = plotlist, ncol = 2, nrow = ceiling(length(plotlist)/2),
+#           common.legend = TRUE)
+# dev.off()
+
+#### Genes with conserved expression dynamics are more highly connected ####
+tfdf <- left_join(TFdeldf,
+                  y = finaldf |> filter(experiment == "LowN") |> # change experiment to check different diverging portions
+                    select(gene_name, cer, par, dynamics),
+                  by = "gene_name") |>
+  drop_na() |>
+  filter(organism %in% c("cer", "par"))
+# # Or check it for genes ID'd as diverged dynamics in any/all environment(s)
+# tfdf <- left_join(TFdeldf,
+#                   y = finaldf |> group_by(gene_name) |>
+#                     filter(experiment %in% c("LowN", "CC", "LowPi", "HAP4")) |> 
+#                     summarise(dynamics = if_else(all(dynamics == "conserved"),
+#                                                  true = "conserved", false = "diverged")) |>
+#                     unique(),
+#                   by = "gene_name") |>
+#   drop_na() |>
+#   filter(organism %in% c("cer", "par"))
+# table(tfdf$dynamics)
+
+# # As null control, pick random genes to be diverged
+# random_diverged_genes <- sample(unique(TFdeldf$gene_name), 1000, replace = FALSE)
+# tfdf <- TFdeldf |> 
+#   mutate(dynamics = if_else(gene_name %in% random_diverged_genes,
+#          true = "diverged", false = "conserved")) |> 
+#   filter(organism %in% c("cer", "par"))
+table(tfdf$dynamics)
+
+# roughly same proportion of conserved vs diverged genes have
+# at least one TFdel effect:
+plotdf <- tfdf |> mutate(sig = padj < p_thresh) |> 
+  group_by(dynamics, gene_name, organism, timepoint) |> summarise(sig = any(sig)) |> 
+  unique()
+plot_tab <- plotdf |> group_by(dynamics) |> 
+  summarise(n = n(),
+            n_sig = sum(sig))
+plot_tab
+sum(plot_tab$n_sig)/sum(plot_tab$n) # ~66% of gene-org-timepoint groups have at least one sig TF effect
+cbind(plot_tab$n/sum(plot_tab$n), 
+      plot_tab$n_sig/sum(plot_tab$n_sig)) 
+# ~70% genes are conserved, and ~70% of genes with at least one sig TF effect are conserved
+
+# But, when you count all the TF effects on each gene,
+# conserved genes are enriched for tfdel effects, 
+# either direction, any tf
+sig_tab <- tfdf |> mutate(sig = padj < p_thresh) |>
+  select(sig, dynamics) |> table()
+sig_tab/rowSums(sig_tab) # conserved has about 70% of genes and 78% of significant effects
+fisher.test(sig_tab)
+
+plotdf <- tfdf |> mutate(sig = padj < p_thresh)
+# If the following barplot looks too similar, this checks that the numbers are actually different
+plotdf |> filter(sig) |> 
+  group_by(organism, timepoint) |> 
+  summarise(prop_div = sum(dynamics == "diverged")/length(dynamics),
+            size = n())
+pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/tfdel_prop_bars.pdf",
+    width = 2, height = 2)
+ggplot() +
+  geom_bar(data = unique(select(plotdf, gene_name, dynamics)),
+           aes(fill = dynamics, x = 1), position = "fill") +
+  geom_bar(data = filter(plotdf, sig), 
+           aes(fill = dynamics, x = 2), position = "fill") +
+  geom_bar(data = filter(plotdf, sig & organism == "cer" & timepoint == "TP1"), 
+           aes(fill = dynamics, x = 3), position = "fill") +
+  geom_bar(data = filter(plotdf, sig & organism == "cer" & timepoint == "TP3"), 
+           aes(fill = dynamics, x = 4), position = "fill") +
+  geom_bar(data = filter(plotdf, sig & organism == "par" & timepoint == "TP1"), 
+           aes(fill = dynamics, x = 5), position = "fill") +
+  geom_bar(data = filter(plotdf, sig & organism == "par" & timepoint == "TP3"), 
+           aes(fill = dynamics, x = 6), position = "fill") +
+  scale_fill_discrete(type = c(levdyn_colordf$type[levdyn_colordf$limits == "conserved level and dynamics"],
+                               levdyn_colordf$type[levdyn_colordf$limits == "conserved level, diverged dynamics"]),
+                      limits = c("conserved", "diverged")) +
+  geom_hline(yintercept = as.numeric(plot_tab[2, 2]/(plot_tab[1, 2] + plot_tab[2, 2]))) +
+  xlab("") +
+  ylab("proportion") +
+  theme_classic() +
+  theme(axis.ticks.x = element_blank(),
+        axis.text.x = element_blank(),
+        legend.position = "none")
+dev.off()
+
+# This is because individual conserved genes tend to be more highly connected:
+ntfdf <- tfdf |> mutate(sig = padj < p_thresh) |>
+  group_by(gene_name, organism, timepoint, dynamics) |> 
+  summarise(n_tfs = sum(sig)) |> ungroup()
+ntf_cutoff <- 5 # number of TFdels that need to cause differential expression for a gene to be considered "highly connected"
+# At higher connectivity levels, there are more conserved than diverged TF effects
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/histogram.pdf",
+    width = 4, height = 3)
+ggplot(ntfdf, aes(x = n_tfs)) +
+  geom_histogram(aes(fill = dynamics,
+                     y = after_stat(density)),
+                 bins = 46, binwidth = 1, position = "identity",
+                 alpha = 0.8) +
+  geom_vline(xintercept = ntf_cutoff - 0.5) +
+  scale_fill_discrete(type = c(levdyn_colordf$type[levdyn_colordf$limits == "conserved level and dynamics"],
+                               levdyn_colordf$type[levdyn_colordf$limits == "conserved level, diverged dynamics"]),
+                      limits = c("conserved", "diverged")) +
+  theme_classic() +
+  xlab("number of TF deletions affecting gene") +
+  ylab("% genes") + 
+  theme(legend.position = "bottom")
+dev.off()
+# can also separate out species and timepoints:
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/Supplement/tfdel_histograms.pdf",
+    width = 6, height = 2)
+ggplot(ntfdf, 
+       aes(x = n_tfs)) +
+  geom_histogram(aes(y = after_stat(density),
+                     group = dynamics,
+                     fill = dynamics),
+                 bins = 46, binwidth = 1, position = "identity",
+                 alpha = 0.8) + 
+  scale_fill_discrete(type = c(levdyn_colordf$type[levdyn_colordf$limits == "conserved level and dynamics"],
+                               levdyn_colordf$type[levdyn_colordf$limits == "conserved level, diverged dynamics"]),
+                      limits = c("conserved", "diverged")) +
+  facet_grid(rows = vars(organism), cols = vars(timepoint)) +
+  theme_classic() +
+  xlab("number of TF deletions affecting gene") +
+  ylab("% genes") # more pronounced effect at the later timepoint
+dev.off()
+
+# Highly connected genes tend to be conserved in every experiment (but
+# especially LowN)
+ntfdf |> mutate(highly_connected = n_tfs > 10) |> 
+  select(highly_connected, organism, timepoint) |> table()
+highly_connected_genes <- ntfdf |> filter(n_tfs > 10) |> 
+  select(gene_name) |> pull()
+finaldf |> filter(gene_name %in% highly_connected_genes) |> 
+  select(dynamics, experiment) |> table()
+finaldf |> filter(gene_name %in% highly_connected_genes) |> 
+  select(cer, par) |> table()
+
+# which TFs are represented the most in conserved vs diverged?
+plotdf <- tfdf |> filter(padj < p_thresh) |> 
+  group_by(dynamics, deletion) |> summarise(n_tfs = n()) |> 
+  pivot_wider(id_cols = "deletion", names_from = "dynamics",
+              values_from = "n_tfs")
+plotdf$prop_diverged <- plotdf$diverged/sum(plotdf$diverged)
+plotdf$prop_conserved <- plotdf$conserved/sum(plotdf$conserved)
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/Supplement/tfdel_per_tf.pdf",
+    width = 4, height = 4)
+ggplot(plotdf, aes(x = log2(prop_conserved), y = log2(prop_diverged))) +
+  geom_point() +
+  geom_text(data = filter(plotdf, prop_conserved/prop_diverged > 1.5 | 
+                            prop_diverged/prop_conserved > 1.5), 
+            aes(label = deletion, color = deletion)) +
+  geom_abline(slope = 1, intercept = 0) +
+  theme(legend.position = "none") +
+  ylab("% diverged genes affected \nby TF deletion (log2 scale)") +
+  xlab("% conserved genes affected \nby TF deletion (log2 scale)")
+dev.off()
+# overrepresesnted in diverged: HAP4, SKN7, (also a little: CBF1, HAP3, HAP5, INO2, PHO4, SWI4, SUM1, STB5)
+# overrepresesnted in conserved: GAT1, GCN4, GZF3, MSN2, LEU3, RFX1, RGT1, SOK2 (also a little: ARG81, GLN3, MBP1, MIG1, RIM101, URE2, YAP1, ZAP1)
+# but no real outliers
+
+#### Genes with high mean and variance across environments are more connected ####
+# TODO: Now that mean is also affected not just variance, you need to correct
+# for mean expr if you're gonna say that conserved have more or diverged have more effects
+# But this is less important than getting to the effects on cluster mean expression 
+
+# conserved genes tend to have higher mean expression and variance
+# is this related to how they tend to be affected by more TF deletions?
+load("data_files/Cleaned_Counts.RData")
+cer_counts <- counts[, sample_info$organism == "cer" &
+                       sample_info$experiment != "LowN"]
+par_counts <- counts[, sample_info$organism == "par" &
+                       sample_info$experiment != "LowN"]
+plotdf <- bind_rows(x = tibble(gene_name = rownames(cer_counts),
+                               mean_expr = rowMeans(cer_counts),
+                               var_expr = rowVars(cer_counts),
+                               organism = "cer"),
+                    y = tibble(gene_name = rownames(par_counts),
+                               mean_expr = rowMeans(par_counts),
+                               var_expr = rowVars(par_counts),
+                               organism = "par")) |> 
+  right_join(tfdf, by = c("gene_name", "organism")) |> 
+  filter(padj < p_thresh) |> 
+  group_by(gene_name, cer, par, dynamics, organism,
+           timepoint, mean_expr, var_expr) |> 
+  summarise(n_tfs = n(),
+            tfs = list(deletion)) |> 
+  ungroup()
+plotdf$is_highly_connected <- plotdf$n_tfs >= ntf_cutoff
+# Mean
+ggplot(plotdf, aes(x = log2(mean_expr), y = n_tfs)) + 
+  geom_point(aes(color = dynamics))
+ggplot(plotdf, aes(x = log2(mean_expr))) + 
+  geom_density(aes(fill = dynamics), alpha = 0.5)
+ggplot(plotdf, aes(x = log2(mean_expr))) + 
+  geom_density(aes(fill = is_highly_connected), alpha = 0.5)
+# Variance
+ggplot(plotdf, aes(x = log2(var_expr), y = n_tfs)) + 
+  geom_point(aes(color = dynamics)) +
+  geom_smooth(aes(color = dynamics), method = "lm")
+ggplot(plotdf, aes(x = log2(var_expr))) + 
+  geom_density(aes(fill = dynamics), alpha = 0.5)
+# the most highly connected genes do have much higher variance:
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/var_density.pdf",
+    width = 3.5, height = 2)
+ggplot(plotdf, aes(x = log2(var_expr))) + 
+  geom_density(aes(fill = is_highly_connected), alpha = 0.5) +
+  scale_fill_discrete(type = c("grey", "purple"),
+                      limits = c(FALSE, TRUE),
+                      labels = c(paste0("< ", ntf_cutoff, " TFs affecting gene"),
+                                 paste0(ntf_cutoff, " + TFs affecting gene"))) + 
+  xlab("expression variance across \nenvironments (log2 scale)") +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = "right")
+dev.off()
+
+# Is there an excess of variance among highly connected genes, controlling for mean?
+# not highly connected
+ggplot(plotdf, aes(x = log2(mean_expr), y = log2(var_expr))) +
+  geom_point(data = filter(plotdf, !is_highly_connected),
+             aes(color = is_highly_connected), alpha = 0.1) +
+  geom_smooth(method = "lm")
+# highly connected
+ggplot(plotdf, aes(x = log2(mean_expr), y = log2(var_expr))) +
+  geom_point(data = filter(plotdf, is_highly_connected),
+             aes(color = is_highly_connected), alpha = 0.1) +
+  geom_smooth(method = "lm") # doesn't look like it
+
+
+#### bubble plots of single gene lfc versus mean expr of WT/TFdel ####
+# Gene quantdf not only has a record of what effect each TFdel had on each cluster,
+# but also how many genes were DE up or down in each TFdel
+genequantdf <- TFdeldf |>
+  filter(gene_name %in% finaldf$gene_name[finaldf$experiment == "LowN"]) |> # removing lowly expressed genes
+  left_join(y = finaldf |>
+              filter(experiment == "LowN") |>
+              group_by(cer, par) |> 
+              mutate(ngenes = n()) |>
+              ungroup() |>
+              select(gene_name, cer, par, ngenes, dynamics),
+            by = c("gene_name")) |>
+  # group_by(deletion, timepoint, organism, cer, par, ngenes, dynamics) |>
+  # summarise(n_up = sum(lfc > 0 & padj < p_thresh),
+  #           n_down = sum(lfc < 0 & padj < p_thresh)) |>
+  # ungroup() |>
+  mutate(time_point_str = if_else(timepoint == "TP1",
+                                  true = "0 h, YPD",
+                                  false = "16 h, low N"),
+         clust = if_else(organism == "cer",
+                         true = cer, false = par)) |>
+  select(-timepoint) |>
+  left_join(y = quantdf,
+            by = c("organism", "clust",
+                   "deletion"="tf", "time_point_str"),
+            relationship = "many-to-one")
+
+### Supplementary figure: Proportion of genes up vs down tends to be in same direction as TFdel effect on mean expression
+plotdf <- genequantdf |> filter(organism %in% c("cer", "par") &
+                                  padj < p_thresh) |> 
+  group_by(clust, organism, deletion, time_point_str,
+           mean_del, mean_WT, mean_dir, ngenes) |> 
+  summarise(mean_lfc = mean(lfc),
+            nsig = n())
+# for all 4 cluster combos:
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/Supplement/TFdel_mean_effect_vs_gene_effect.pdf",
+    width = 5, height = 3)
+ggplot(plotdf, aes(x = mean_del - mean_WT, y = mean_lfc)) +
+  geom_point(aes(color = mean_dir, size = nsig)) +
+  geom_hline(yintercept = 0) +
+  ylab("mean l2fc") +
+  xlab("Average expression in TF deletion - WT") +
+  theme_classic()
+dev.off()
+
+# that outlier is HXT5 (YHR096C), way down in Spar in Sum1 and Gat1 delete
+# there is some literature on how these are diverging in saccharomyces
+plotdf |> filter(mean_lfc < -15)
+genequantdf |> filter(cer == 1 & par == 0 & 
+                        lfc < -15 & organism == "par")
+
+# without outliers and with mean_dir=none genes faded to the back:
+ggplot(plotdf, aes(x = mean_del - mean_WT, y = mean_lfc)) +
+  geom_point(data = filter(plotdf, mean_dir == "none"),
+             aes(color = mean_dir, size = nsig/ngenes),
+             alpha = 0.25) +
+  geom_point(data = filter(plotdf, mean_dir != "none"),
+             aes(color = mean_dir, size = nsig/ngenes), alpha = 0.5) +
+  geom_hline(yintercept = 0) +
+  ylab("mean l2fc") +
+  xlab("Average expression in TF deletion - WT") +
+  theme_classic() +
+  ylim(c(-5, 5))
+
+# individual clusters (just to see that they are the same pattern)
+# increasing cer
+ggplot(plotdf, aes(x = mean_del - mean_WT, y = mean_lfc)) +
+  geom_point(data = filter(plotdf, mean_dir == "none" & clust == 1 & organism == "cer"),
+             aes(color = mean_dir, size = nsig/ngenes),
+             alpha = 0.5) +
+  geom_point(data = filter(plotdf, mean_dir != "none" & clust == 1 & organism == "cer"),
+             aes(color = mean_dir, size = nsig/ngenes)) +
+  geom_hline(yintercept = 0) +
+  ylab("mean l2fc") +
+  xlab("Average expression in TF deletion - WT") +
+  theme_classic() +
+  ylim(c(-5, 5))
+# increasing par
+ggplot(plotdf, aes(x = mean_del - mean_WT, y = mean_lfc)) +
+  geom_point(data = filter(plotdf, mean_dir == "none" & clust == 1 & organism == "par"),
+             aes(color = mean_dir, size = nsig/ngenes),
+             alpha = 0.5) +
+  geom_point(data = filter(plotdf, mean_dir != "none" & clust == 1 & organism == "par"),
+             aes(color = mean_dir, size = nsig/ngenes)) +
+  geom_hline(yintercept = 0) +
+  ylab("mean l2fc") +
+  xlab("Average expression in TF deletion - WT") +
+  theme_classic() +
+  ylim(c(-5, 5))
 #### GLN3 deletion ####
 # From previous plots, GLN3delete was identified to cause genes
 # diverging in both 2-1 and 1-2 to 
@@ -668,7 +2495,7 @@ compareQuartet(.del = "TEC1delete", .g = "YOL052C-A") # this gene was flagged fo
 # below it's just 7pm and I'm tired)
 # TODO: I'll probably need to select the genes farthest from y=x in
 # the wt vs tfdel lfc(c/p) plots (red and green genes in tilt troubleshoot plots)
-cutoff_lfc <- 2
+eff_thresh <- 2
 DEup <- bind_rows(mutate(filter(TFdeldf_hyb, lfc_wt > cutoff_lfc),
                                  type = "wt_hyb"),
                           mutate(filter(TFdeldf_parents, lfc_wt > cutoff_lfc),
@@ -1580,8 +3407,8 @@ random_TFenrichdf35 <- random_TFenrichdf35 |> filter(deletion %in% common_TFs)
 for (tf in common_TFs) {
   orf <- TFdel_lookup |> filter(common == tf) |> select(systematic) |> pull()
   coeff_cer <- TFdeldf_cer |> filter(gene_name == orf & deletion == tf) |> select(coef) |> pull()
-  pval_cer <- TFdeldf_cer |> filter(gene_name == orf & deletion == tf) |> select(pval) |> pull()
-  cat(tf, orf, "coefficient:", coeff_cer, "pvalue:", pval_cer, "\n")
+  padj_cer <- TFdeldf_cer |> filter(gene_name == orf & deletion == tf) |> select(padj) |> pull()
+  cat(tf, orf, "coefficient:", coeff_cer, "pvalue:", padj_cer, "\n")
 } # The empties are genes that don't have expression data (CFB1 and HAP1)
 # all strongly negative
 
@@ -1589,8 +3416,8 @@ for (tf in common_TFs) {
 for (tf in common_TFs) {
   orf <- TFdel_lookup |> filter(common == tf) |> select(systematic) |> pull()
   coeff_par <- TFdeldf_par |> filter(gene_name == orf & deletion == tf) |> select(coef) |> pull()
-  pval_par <- TFdeldf_par |> filter(gene_name == orf & deletion == tf) |> select(pval) |> pull()
-  cat(tf, orf, "coefficient:", coeff_par, "pvalue:", pval_par, "\n")
+  padj_par <- TFdeldf_par |> filter(gene_name == orf & deletion == tf) |> select(padj) |> pull()
+  cat(tf, orf, "coefficient:", coeff_par, "pvalue:", padj_par, "\n")
 } # all strongly negative except INO4, it's lowly expressed, so deletion can't be distinguished from WT low expression
 
 # visualizing how many samples per genotype. 
@@ -1605,20 +3432,20 @@ table(infos_TFdel$par$genotype)
 names(table(infos_TFdel$par$genotype))[table(infos_TFdel$par$genotype) < 6]
 
 # how many are DE in each species?
-sum(abs(TFdeldf_cer$coef) > coef_thresh & TFdeldf_cer$pval < p_thresh, na.rm = TRUE) # all cer
-sum(abs(TFdeldf_par$coef) > coef_thresh & TFdeldf_par$pval < p_thresh, na.rm = TRUE) # all par
-sum(abs(TFdeldf_cer$coef) > coef_thresh & TFdeldf_cer$pval < p_thresh &
-      abs(TFdeldf_par$coef) > coef_thresh & TFdeldf_par$pval < p_thresh, na.rm = TRUE) # both cer and par
+sum(abs(TFdeldf_cer$coef) > coef_thresh & TFdeldf_cer$padj < p_thresh, na.rm = TRUE) # all cer
+sum(abs(TFdeldf_par$coef) > coef_thresh & TFdeldf_par$padj < p_thresh, na.rm = TRUE) # all par
+sum(abs(TFdeldf_cer$coef) > coef_thresh & TFdeldf_cer$padj < p_thresh &
+      abs(TFdeldf_par$coef) > coef_thresh & TFdeldf_par$padj < p_thresh, na.rm = TRUE) # both cer and par
 # more of medium effect:
-sum(abs(TFdeldf_cer$coef) > 1 & TFdeldf_cer$pval < p_thresh, na.rm = TRUE) # all cer
-sum(abs(TFdeldf_par$coef) > 1 & TFdeldf_par$pval < p_thresh, na.rm = TRUE) # all par
-sum(abs(TFdeldf_cer$coef) > 1 & TFdeldf_cer$pval < p_thresh &
-      abs(TFdeldf_par$coef) > 1 & TFdeldf_par$pval < p_thresh, na.rm = TRUE) # both cer and par
+sum(abs(TFdeldf_cer$coef) > 1 & TFdeldf_cer$padj < p_thresh, na.rm = TRUE) # all cer
+sum(abs(TFdeldf_par$coef) > 1 & TFdeldf_par$padj < p_thresh, na.rm = TRUE) # all par
+sum(abs(TFdeldf_cer$coef) > 1 & TFdeldf_cer$padj < p_thresh &
+      abs(TFdeldf_par$coef) > 1 & TFdeldf_par$padj < p_thresh, na.rm = TRUE) # both cer and par
 # a ton of small effect:
-sum(abs(TFdeldf_cer$coef) > 0.25 & TFdeldf_cer$pval < p_thresh, na.rm = TRUE) # all cer
-sum(abs(TFdeldf_par$coef) > 0.25 & TFdeldf_par$pval < p_thresh, na.rm = TRUE) # all par
-sum(abs(TFdeldf_cer$coef) > 0.25 & TFdeldf_cer$pval < p_thresh &
-    abs(TFdeldf_par$coef) > 0.25 & TFdeldf_par$pval < p_thresh, na.rm = TRUE) # both cer and par
+sum(abs(TFdeldf_cer$coef) > 0.25 & TFdeldf_cer$padj < p_thresh, na.rm = TRUE) # all cer
+sum(abs(TFdeldf_par$coef) > 0.25 & TFdeldf_par$padj < p_thresh, na.rm = TRUE) # all par
+sum(abs(TFdeldf_cer$coef) > 0.25 & TFdeldf_cer$padj < p_thresh &
+    abs(TFdeldf_par$coef) > 0.25 & TFdeldf_par$padj < p_thresh, na.rm = TRUE) # both cer and par
 
 #### Why are so many genes only DE in one species? ####
 
@@ -1632,30 +3459,30 @@ sum(abs(TFdeldf_cer$coef) > 0.25 & TFdeldf_cer$pval < p_thresh &
 # lfc's are just absolutely bonkers)
 
 # first, are there any genes with a very nonsig pvalue and high coefficient? 
-sum(abs(TFdeldf_cer$coef) > 10 & TFdeldf_cer$pval >= 0.05)
-sum(abs(TFdeldf_par$coef) > 10 & TFdeldf_par$pval >= 0.05) # yes there are. So we should filter them out
+sum(abs(TFdeldf_cer$coef) > 10 & TFdeldf_cer$padj >= 0.05)
+sum(abs(TFdeldf_par$coef) > 10 & TFdeldf_par$padj >= 0.05) # yes there are. So we should filter them out
 # the counts over the red line are our problem genes
-ggplot(filter(TFdeldf_cer, pval >= 0.05), aes(x = abs(coef))) + 
+ggplot(filter(TFdeldf_cer, padj >= 0.05), aes(x = abs(coef))) + 
   geom_histogram() + 
   geom_vline(xintercept = coef_thresh, color = "red") # there's a couple way up high, but it's hard to see them
 # log scale
-ggplot(filter(TFdeldf_cer, pval >= 0.05), aes(x = log(abs(coef) + 1e-9))) + 
+ggplot(filter(TFdeldf_cer, padj >= 0.05), aes(x = log(abs(coef) + 1e-9))) + 
   geom_histogram() + 
   geom_vline(xintercept = log(coef_thresh + 1e-9), color = "red")
 # the counts over the red line are true significant
-ggplot(filter(TFdeldf_cer, pval < 0.05), aes(x = abs(coef))) + 
+ggplot(filter(TFdeldf_cer, padj < 0.05), aes(x = abs(coef))) + 
   geom_histogram() + 
   geom_vline(xintercept = coef_thresh, color = "red")
 # log scale
-ggplot(filter(TFdeldf_cer, pval < 0.05), aes(x = log(abs(coef) + 1e-9))) + 
+ggplot(filter(TFdeldf_cer, padj < 0.05), aes(x = log(abs(coef) + 1e-9))) + 
   geom_histogram() + 
   geom_vline(xintercept = log(coef_thresh + 1e-9), color = "red")
 
 # plotting lfc of each gene in response to same TF deletion in cer vs par
-plotdf <- bind_rows(mutate(filter(TFdeldf_cer, pval < 0.05), species = "cer"),
-                    mutate(filter(TFdeldf_par, pval < 0.05), species = "par")) |> 
+plotdf <- bind_rows(mutate(filter(TFdeldf_cer, padj < 0.05), species = "cer"),
+                    mutate(filter(TFdeldf_par, padj < 0.05), species = "par")) |> 
   pivot_wider(id_cols = c("gene_name", "deletion"), values_from = "coef",
-              names_from = "species") |> drop_na() # we have to drop na for all the genes that are only pval < 0.05 in one species or the other
+              names_from = "species") |> drop_na() # we have to drop na for all the genes that are only padj < 0.05 in one species or the other
 coef_thresh <- 2
 ggplot(plotdf, aes(x = cer, y = par)) + geom_hex() + 
   geom_hline(yintercept = coef_thresh, color = "red") +
@@ -1684,10 +3511,10 @@ sum(plotdf$cer > coef_thresh & plotdf$par < -coef_thresh) + sum(plotdf$cer < -co
 plotdf <- bind_rows(mutate(TFdeldf_cer, species = "cer"),
                     mutate(TFdeldf_par, species = "par")) |> 
   pivot_wider(id_cols = c("gene_name", "deletion"), 
-              values_from = c("coef", "pval"),
+              values_from = c("coef", "padj"),
               names_from = "species") |> 
-  filter((pval_cer < p_thresh & abs(coef_cer) > coef_thresh) | 
-           pval_par < p_thresh & abs(coef_par) > coef_thresh) # filtering for significance in at least one species
+  filter((padj_cer < p_thresh & abs(coef_cer) > coef_thresh) | 
+           padj_par < p_thresh & abs(coef_par) > coef_thresh) # filtering for significance in at least one species
 plotdf$direction <- map2(plotdf$coef_cer, plotdf$coef_par, \(x, y) {
   if ((x > coef_thresh & y > coef_thresh) | (x < -coef_thresh & y < -coef_thresh)) {
     return("DE same direction")
@@ -1717,11 +3544,11 @@ ggplot(plotdf, aes(x = coef_cer, y = coef_par)) +
                                   "DE S. cerevisiae only",
                                   "DE S. paradoxus only"))
 # those very crazy outliers in one species or the other have very 
-# nonsig pvalues in that species---they just happen to be sig in the other species:
-plotdf |> filter(abs(coef_cer) > 20) |> select(pval_cer) |> min() # huge, nonsig
-plotdf |> filter(abs(coef_cer) > 20) |> select(pval_par) |> min() # tiny, sig
-plotdf |> filter(abs(coef_par) > 20) |> select(pval_par) |> min() # huge, nonsig
-plotdf |> filter(abs(coef_par) > 20) |> select(pval_cer) |> min() # tiny, sig
+# nonsig padjues in that species---they just happen to be sig in the other species:
+plotdf |> filter(abs(coef_cer) > 20) |> select(padj_cer) |> min() # huge, nonsig
+plotdf |> filter(abs(coef_cer) > 20) |> select(padj_par) |> min() # tiny, sig
+plotdf |> filter(abs(coef_par) > 20) |> select(padj_par) |> min() # huge, nonsig
+plotdf |> filter(abs(coef_par) > 20) |> select(padj_cer) |> min() # tiny, sig
 # without crazy outliers
 p_point <- ggplot(filter(plotdf, abs(coef_cer) < 20 & abs(coef_par) < 20), 
        aes(x = coef_cer, y = coef_par)) + 
@@ -1780,7 +3607,7 @@ cor(test$coef_cer, test$coef_par, method = "spearman") # no
 # let's visualize a random example just to make sure nothing weird's going on
 # in cer
 random_cerDE <- plotdf |> 
-  filter(direction == "DE S. cerevisiae only" & abs(coef_cer) > 2 & pval_cer < 1e-5) |> 
+  filter(direction == "DE S. cerevisiae only" & abs(coef_cer) > 2 & padj_cer < 1e-5) |> 
   select(gene_name, deletion) |> 
   slice_sample(n = 1)
 plotdf |> filter(gene_name == random_cerDE$gene_name & deletion == random_cerDE$deletion)
@@ -1807,7 +3634,7 @@ filter(gdf, species == "par" & genotype == paste0(random_cerDE$deletion, "delete
 
 # in par
 random_parDE <- plotdf |> 
-  filter(direction == "DE S. paradoxus only" & abs(coef_par) > 2 & pval_par < 1e-5) |> 
+  filter(direction == "DE S. paradoxus only" & abs(coef_par) > 2 & padj_par < 1e-5) |> 
   select(gene_name, deletion) |> 
   slice_sample(n = 1)
 plotdf |> filter(gene_name == random_parDE$gene_name & deletion == random_parDE$deletion)
@@ -2865,31 +4692,29 @@ annotate_figure(p, left = "number of genes up/down in response to each TF deleti
 dev.off()
 
 #### getting to know the TF deletions ####
+TFdel_lookup <- read_delim("data_files/downloaded_genomes_and_features/yeastract_46TFs.csv", col_names = FALSE, col_select = c(1,2), delim = ";") # gets some warnings, but so far has been fine
+colnames(TFdel_lookup) <- c("common", "systematic")
+TFdf <- finaldf |> select(gene_name, effect_size_species, pvalue_species, experiment) |>
+  right_join(y = TFdel_lookup, by = c("gene_name"="systematic"), 
+             relationship = "many-to-one")
 # which module are all the TFs in?
-TFdf |> left_join(y = select(module_genedf10, gene_name, CCM_color),
-                  by = "gene_name") |> select(common, gene_name, CCM_color) |>
-  filter(common %in% common_TFs) |> 
-  print(n = nrow(TFdf)) 
-TFdf |> left_join(y = select(module_genedf10, gene_name, CCM_color),
-                  by = "gene_name") |> 
-  filter(common %in% common_TFs) |> 
-  select(CCM_color) |> 
-  table() # most are divergent, conserved are mostly in red CCM
 
 # which environments are the TFs DE between species in?
 # not the world's prettiest plot, but you can mostly see the TF names
-pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/TFeffectSizes.pdf", width = 5, height = 4)
-ggplot(filter(TFbyexpdf, adjusted_effect_size != 0 &
-                common %in% common_TFs), aes(x = experiment, y = adjusted_effect_size)) +
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/TFexpression.pdf", width = 5, height = 4)
+ggplot(filter(TFdf, pvalue_species < p_thresh &
+                abs(effect_size_species) > 0.75), aes(x = experiment, y = effect_size_species)) +
   geom_point(aes(group = common, color = common)) +
   geom_line(aes(group = common, color = common)) +
   geom_text(aes(label = common, color = common),
             check_overlap = FALSE, size = 3,
-            position = position_nudge(x = 0.1, y = 0.05)) +
+            position = position_jitter(seed = 1)) +
   theme_classic() +
   theme(legend.position = "none") +
-  scale_x_discrete(breaks = c("CC", "HAP4", "LowPi", "TFdelxLowN"),
-                   labels = c("Urea Shock", "Saturated Growth", "Low Phosphorus", "Low Nitrogen")) +
+  scale_x_discrete(breaks = c("CC", "HAP4", "LowPi", "LowN", "Heat", "Cold"),
+                   limits = c("CC", "HAP4", "LowPi", "LowN", "Heat", "Cold"),
+                   labels = c("Urea Shock", "Saturated Growth", "Low Phosphorus", "Low Nitrogen",
+                              "Heat Stress", "Cold Stress")) +
   ylab("+ = Higher expressed in cerevisiae\n
        - = Higher expressed in paradoxus") +
   geom_hline(yintercept = 0) +
