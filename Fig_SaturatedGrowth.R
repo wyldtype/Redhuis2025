@@ -1,6 +1,6 @@
 setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2024/")
 source("functions_for_figure_scripts.R")
-load("data_files/FinalDataframe.RData")
+load("data_files/FinalDataframe3Disp.RData")
 load("data_files/Cleaned_Counts.RData")
 load("data_files/Cleaned_Counts_Allele.RData")
 
@@ -53,7 +53,8 @@ expdf |> filter(level == "diverged" & dynamics == "conserved") |> select(gene_na
   pull() |> sample(1)
 pdf("../../aligning_the_molecular_phenotype/paper_figures/ExperimentOverview/level_expr.pdf",
     width = 2, height = 2)
-p <- plotGenes("YBR067C", .experiment_name = experiment_name)
+p <- plotGenes("YBR067C", .experiment_name = experiment_name,
+               .normalization = "log2")
 annotate_figure(p, top = "YBR067C")
 dev.off()
 
@@ -62,12 +63,12 @@ expdf |> filter(level == "conserved" & dynamics == "diverged") |> select(gene_na
   pull() |> sample(1) # YNL312W is absolutely wild, nearly mirror image
 pdf("../../aligning_the_molecular_phenotype/paper_figures/ExperimentOverview/dynamics_expr.pdf",
     width = 2, height = 2)
-p <- plotGenes("YJR001W", .experiment_name = experiment_name)
+p <- plotGenes("YJR001W", .experiment_name = experiment_name, .normalization = "log2")
 annotate_figure(p, top = "YJR001W")
 dev.off()
 
 #### average expression of all gene groups ####
-ylims <- c(4, 9)
+ylims <- c(3, 9)
 plotlist <- vector(mode = "list", length = length(code_order))
 names(plotlist) <- code_order
 for (g in code_order) {
