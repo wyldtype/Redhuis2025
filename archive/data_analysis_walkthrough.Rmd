@@ -1,0 +1,34 @@
+---
+title: "Barkai Network Analysis Walkthrough"
+author: "Anna Redgrave"
+date: "2023-01-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Objectives
+
+* Delve more in-depth into the rationale behind different parts of the network analysis
+* Document all the different iterations of the analysis in one place to avoid repeating mistakes
+* Ideally help other people conduct similar analyses
+
+## Useful resources I follow
+
+* WGCNA! All the tutorials: https://horvath.genetics.ucla.edu/html/CoexpressionNetwork/Rpackages/WGCNA/
+* Jeremy Miller's WGCNA meta-analysis tutorial: https://horvath.genetics.ucla.edu/html/CoexpressionNetwork/JMiller/ (Miller JA, Horvath S, Geschwind DH. (2010) Divergence of human and mouse brain transcriptome highlights Alzheimer disease pathways. Proc Natl Acad Sci U S A. 2010 Jul 13;107(28):12698-703.)
+* DESeq2 vignette: http://bioconductor.org/packages/devel/bioc/vignettes/DESeq2/inst/doc/DESeq2.html
+
+
+## Data cleaning 
+```{r tidyverse openxlsx}
+
+```
+
+## Network construction
+
+```{r}
+```
+
