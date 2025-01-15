@@ -10,6 +10,10 @@ counts <- list(cerTP1 = counts_TFdel$cer[,infos_TFdel$cer$time_point_num == 0],
                parTP1 = counts_TFdel$par[,infos_TFdel$par$time_point_num == 0],
                hycTP1 = counts_TFdel_allele$cer[,infos_TFdel_allele$cer$time_point_num == 0],
                hypTP1 = counts_TFdel_allele$par[,infos_TFdel_allele$par$time_point_num == 0],
+               cerTP2 = counts_TFdel$cer[,infos_TFdel$cer$time_point_num == 60],
+               parTP2 = counts_TFdel$par[,infos_TFdel$par$time_point_num == 60],
+               hycTP2 = counts_TFdel_allele$cer[,infos_TFdel_allele$cer$time_point_num == 60],
+               hypTP2 = counts_TFdel_allele$par[,infos_TFdel_allele$par$time_point_num == 60],
                cerTP3 = counts_TFdel$cer[,infos_TFdel$cer$time_point_num == 960],
                parTP3 = counts_TFdel$par[,infos_TFdel$par$time_point_num == 960],
                hycTP3 = counts_TFdel_allele$cer[,infos_TFdel_allele$cer$time_point_num == 960],
@@ -18,11 +22,50 @@ infos <- list(cerTP1 = infos_TFdel$cer[infos_TFdel$cer$time_point_num == 0,],
               parTP1 = infos_TFdel$par[infos_TFdel$par$time_point_num == 0,],
               hycTP1 = infos_TFdel_allele$cer[infos_TFdel_allele$cer$time_point_num == 0,],
               hypTP1 = infos_TFdel_allele$par[infos_TFdel_allele$par$time_point_num == 0,],
+              cerTP2 = infos_TFdel$cer[infos_TFdel$cer$time_point_num == 60,],
+              parTP2 = infos_TFdel$par[infos_TFdel$par$time_point_num == 60,],
+              hycTP2 = infos_TFdel_allele$cer[infos_TFdel_allele$cer$time_point_num == 60,],
+              hypTP2 = infos_TFdel_allele$par[infos_TFdel_allele$par$time_point_num == 60,],
               cerTP3 = infos_TFdel$cer[infos_TFdel$cer$time_point_num == 960,],
               parTP3 = infos_TFdel$par[infos_TFdel$par$time_point_num == 960,],
               hycTP3 = infos_TFdel_allele$cer[infos_TFdel_allele$cer$time_point_num == 960,],
               hypTP3 = infos_TFdel_allele$par[infos_TFdel_allele$par$time_point_num == 960,])
-# converting genotype to a factor
+
+### removing samples missing replicates
+# DESeq2 still tries to estimate a log2 fold change when a genotype has only one replicate
+# # Example: YAP1 in hybrids (any timepoint)
+# # in parents it has 2 replicates:
+# infos$cerTP1 |> select(genotype, time_point_str) |> table()
+# # in hybrids, one:
+# infos$hycTP1 |> select(genotype, time_point_str) |> table()
+# test <- DESeq(DESeqDataSetFromMatrix(countData = counts$hycTP1,
+#                                      colData = infos$hycTP1,
+#                                      design = ~ genotype))
+# # while most padj are NA, not all are:
+# results(test, contrast = c("genotype", "YAP1delete", "WT"),
+#         alpha = 0.05)[,"padj"] |> table(useNA = "always")
+
+# looping through counts/info to
+# remove genotypes that don't have 
+# 2 replicates at each timepoint
+filterGenotypes <- function(.info, .counts) {
+  tab <- .info |> select(genotype, time_point_str) |> table()
+  no_rep_genotypes <- rownames(tab)[which(tab < 2)]
+  return(filter(.info, !(genotype %in% no_rep_genotypes)))
+}
+infos <- map(infos, filterGenotypes)
+# also updating cols of counts to match columns
+updateCountsCols <- function(.counts, .info) {
+  return(.counts[,.info$sample_name])
+}
+counts <- map2(counts, infos, updateCountsCols)
+
+# now YAP1 isn't in hybrid
+infos$cerTP1 |> select(genotype, time_point_str) |> table()
+infos$hycTP1 |> select(genotype, time_point_str) |> table()
+
+# converting genotype to a factor, after removing genotypes,
+# so different number of levels per dataset
 infos <- map(infos, mutate, 
              genotype = genotype |> 
                as.factor() |> 
@@ -55,6 +98,19 @@ test["YGR192C",] # down in hyc
 test <- results(dds$hypTP1, contrast = c("genotype", "GCR2delete", "WT"),
                 alpha = 0.05)
 test["YGR192C",] # down in hyp
+# TP2
+test <- results(dds$cerTP2, contrast = c("genotype", "GCR2delete", "WT"),
+                alpha = 0.05)
+test["YGR192C",] # down in cer
+test <- results(dds$parTP2, contrast = c("genotype", "GCR2delete", "WT"),
+                alpha = 0.05)
+test["YGR192C",] # down in par
+test <- results(dds$hycTP2, contrast = c("genotype", "GCR2delete", "WT"),
+                alpha = 0.05)
+test["YGR192C",]
+test <- results(dds$hypTP2, contrast = c("genotype", "GCR2delete", "WT"),
+                alpha = 0.05)
+test["YGR192C",] # down in both hybrid alleles
 # TP3
 test <- results(dds$cerTP3, contrast = c("genotype", "GCR2delete", "WT"),
                 alpha = 0.05)
@@ -85,6 +141,19 @@ griddfTP1 <- bind_rows(infos$cerTP1,
                                             true = "hyc",
                                             false = "hyp"))) |> 
   unique()
+griddfTP2 <- bind_rows(infos$cerTP2,
+                       infos$parTP2,
+                       infos$hycTP2,
+                       infos$hypTP2) |> 
+  select(genotype, allele, organism) |> 
+  filter(genotype != "WT") |> 
+  mutate(timepoint = "TP2",
+         orgallele = if_else(organism == "hyb",
+                             false = organism,
+                             true = if_else(allele == "cer",
+                                            true = "hyc",
+                                            false = "hyp"))) |> 
+  unique()
 griddfTP3 <- bind_rows(infos$cerTP3,
                        infos$parTP3,
                        infos$hycTP3,
@@ -98,7 +167,7 @@ griddfTP3 <- bind_rows(infos$cerTP3,
                                             true = "hyc",
                                             false = "hyp"))) |> 
   unique()
-griddf <- bind_rows(griddfTP1, griddfTP3)
+griddf <- bind_rows(griddfTP1, griddfTP2, griddfTP3)
 
 TFdeldf <- map(c(1:nrow(griddf)), \(i) {
   del <- griddf$genotype[i] |> as.character()
@@ -111,24 +180,27 @@ TFdeldf <- map(c(1:nrow(griddf)), \(i) {
                 deletion = gsub("delete", "", del),
                 organism = org,
                 timepoint = tp,
-                mean = res$baseMean,
+                basemean = res$baseMean,
                 lfc = res$log2FoldChange,
                 lfcSE = res$lfcSE,
                 pval = res$pvalue,
                 padj = res$padj))
 }) |> bind_rows()
 
-# A few gene/TF/tp combos didn't converge in DESeq2:
+# A few gene/TF/tp combos didn't converge in DESeq2 or were missing replicates:
+length(unique(TFdeldf$deletion))
 sum(is.na(TFdeldf))
 sum(is.na(TFdeldf$padj))
+table(is.na(TFdeldf$padj), TFdeldf$timepoint)
 sum(is.na(TFdeldf$lfc)) + sum(is.na(TFdeldf$lfcSE)) + sum(is.na(TFdeldf$pval)) + sum(is.na(TFdeldf$padj))
 
 TFdeldf <- drop_na(TFdeldf)
+length(unique(TFdeldf$deletion)) # we shouldn't lose any TFs entirely
 
 sum(TFdeldf$padj < p_thresh)
+sum(TFdeldf$padj >= p_thresh) # should have way fewer significant effects
 
 #### Saving ####
-
 save(TFdeldf, file = "data_files/TFdel_DESeq2.RData")
 
 
