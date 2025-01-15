@@ -1,62 +1,9 @@
-sapply(c("dplyr", "tidyr", "purrr", "WGCNA", "stringr", "ggplot2", "RColorBrewer", "ggpubr", "grid", "ComplexHeatmap"), require, character.only=TRUE)
+sapply(c("dplyr", "tidyr", "purrr", "WGCNA", "stringr", "ggplot2", "RColorBrewer", "ggpubr", "grid", "ComplexHeatmap", "circlize"), require, character.only=TRUE)
 setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2024/")
 source("functions_for_figure_scripts.R")
 load("data_files/old_data_files/FinalDataframe3Disp.RData")
 load("data_files/old_data_files/Cleaned_Counts.RData")
 load("data_files/old_data_files/Cleaned_Counts_Allele.RData")
-ExperimentNames <- unique(finaldf$experiment)
-
-#### Heat/Cold QC ####
-# Before extending conclusions to Heat/Cold, it seems like the counts from
-# that data are different than tag-seq in a few categories
-test_allele <- "cer"
-plotdf <- tibble(mean0_LowN = rowMeans(counts[,sample_info$experiment == "LowN" &
-                                               sample_info$time_point_num == 0 &
-                                               sample_info$allele == test_allele]),
-                 mean0_CC = rowMeans(counts[,sample_info$experiment == "CC" &
-                                             sample_info$time_point_num == 0 &
-                                             sample_info$allele == test_allele]),
-                 mean0_Heat = rowMeans(counts[,sample_info$experiment == "Heat" &
-                                               sample_info$time_point_num == 0 &
-                                               sample_info$allele == test_allele]),
-                 mean0_Cold = rowMeans(counts[,sample_info$experiment == "Cold" &
-                                               sample_info$time_point_num == 0 &
-                                               sample_info$allele == test_allele]),
-                 var_LowN = rowVars(counts[,sample_info$experiment == "LowN" &
-                                                sample_info$allele == test_allele]),
-                 var_CC = rowVars(counts[,sample_info$experiment == "CC" &
-                                              sample_info$allele == test_allele]),
-                 var_Heat = rowVars(counts[,sample_info$experiment == "Heat" &
-                                                sample_info$allele == test_allele]),
-                 var_Cold = rowVars(counts[,sample_info$experiment == "Cold" &
-                                                sample_info$allele == test_allele]))
-
-# 1) each gene's variance across timepoints is less variable than in tag-seq
-# mean at 0 min vs var across timepoints for Heat/Cold/LowN/CC
-ggplot(plotdf, aes(x = log2(mean0_LowN), y = log2(var_LowN))) + geom_point() # LowN
-ggplot(plotdf, aes(x = log2(mean0_CC), y = log2(var_CC))) + geom_point() # CC
-ggplot(plotdf, aes(x = log2(mean0_Heat), y = log2(var_Heat))) + geom_point() # Heat
-ggplot(plotdf, aes(x = log2(mean0_Cold), y = log2(var_Cold))) + geom_point() # Cold
-# Conclusion: does not appear to be less variable
-
-# 2) less variance in mean expression for all genes than in tag-seq
-# each gene's mean expr between replicates at 0 min
-# Heat/Cold vs other experiments
-# LowN vs CC first as a control
-ggplot(plotdf, aes(x = log2(mean0_LowN), y = log2(mean0_CC))) + geom_point() # LowN vs CC
-ggplot(plotdf, aes(x = log2(mean0_Heat), y = log2(mean0_Cold))) + geom_point() # Heat vs Cold
-ggplot(plotdf, aes(x = log2(mean0_LowN), y = log2(mean0_Heat))) + geom_point() # LowN vs Heat
-ggplot(plotdf, aes(x = log2(mean0_LowN), y = log2(mean0_Cold))) + geom_point() # LowN vs Cold
-# interestingly Spar has more similar expr between experiments
-# (cerevisiae is the T73 wine strain that has the HGT from Torulaspora microellipsoides,
-# paradoxus is the N17 that is similar enough to CBS432 to have its reads aligned to its genome)
-
-# 3) They also seem to all be lower expressed, but this shouldn't be
-#    true given they're all cpm now. Good to check though
-# 4) Also, the difference between hybrid alleles seems less distinct than between
-#    parents than in tag-seq, and there's a weird ligning bolt shape in hybrid (Sat growth 492 genes at least, but probs more)
-# knowing answers to these will allow us to better conclude if the Heat/Cold results
-# show comparable conclusions to tag-seq, especially for Spar, which is the same strain CBS432
 
 ExperimentNames <- c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold")
 LongExperimentNames <- c("Saturated Growth", "Cell Cycle", "Low Nitrogen", "Low Phosphate", "Heat Stress", "Cold Stress")
@@ -66,57 +13,68 @@ LongExperimentNames <- c("Saturated Growth", "Cell Cycle", "Low Nitrogen", "Low 
 # patterns is to categorize every gene into one group (conserved, cis/level divergent,
 # trans/dynamics divergent, or other) and show how "other" doesn't encompass many genes
 
-#### Gene ontology enrichment ####
-# table of gene ontology terms associated with each gene
-# each row is a term, so this is a very long table
-goslim <- read.table("data_files/go_slim_mapping.tab", header = FALSE, sep = "\t") |>
-  as_tibble()
-colnames(goslim) <- c("ORF", # (mandatory) - Systematic name of the gene (or gene complex if it starts with CPX-)
-                      "gene", # (optional) - Gene name, if one exists
-                      "SGDID", # SGDID (mandatory) - the SGDID, unique database identifier for the gene
-                      "GO_aspect", # (mandatory) - which ontology: P=Process, F=Function, C=Component
-                      "GOslim_term", # (mandatory) - the name of the GO term that was selected as a GO Slim term
-                      "GOID", # (optional) - the unique numerical identifier of the GO term
-                      "feature_type") # (mandatory) - a description of the sequence feature, such as ORF or tRNA
-too_vague_terms <- c("cellular process", "molecular function", "biological process")
-goslim <- filter(goslim, !(GOslim_term %in% too_vague_terms) & 
-                   (ORF %in% finaldf$gene_name))
+#### Barplots of cons,lev,dyn,levdyn in each Environment ####
+# TODO: some simple quantification extending to non-Saturated
+# growth environments showing
+# A) number of genes in each divergence category is roughly the 
+# same for each environment (most conserved, many dyn, fewer lev, even fewer levdyn)
+# B) levdyn isn't an enriched or unenriched category, just the standard venn diagram null expected overlap
+# pair these barplots with the cluster reference in the next section
+# as a figure after the Saturated Growth figure to 
+# summarize divergence categories in other experiments
 
-# do this per group of interest
-getGOSlimDf <- function(.idxs, .group_name, .file_prefix = "gene_ontology/results/",
-                        .min_hits = 5) {
-  test_table <- goslim |> filter(ORF %in% .idxs) |> select(GOslim_term) |> table()
-  test_table <- test_table[test_table >= .min_hits]
-  testdf <- tibble("term" = names(test_table),
-                   "group_count" = as.numeric(test_table))
-  testdf$overall_count <- map(testdf$term, \(x) {
-    ct <- goslim |> filter(GOslim_term == x) |> select(ORF) |> 
-      pull() |> unique() |> length()
-    return(ct)
-  }) |> unlist()
-  testdf$exact_pval <- map2(testdf$group_count, testdf$overall_count, \(x, y) {
-    n_mod <- length(.idxs)
-    n_genes <- length(unique(finaldf$gene_name))
-    exact_table <- rbind(c(x, n_mod - x), c(y - x, n_genes - n_mod - y))
-    exact_result <- fisher.test(exact_table, alternative = "greater")
-    return(exact_result$p.value)
-  }) |> unlist()
-  testdf$sig <- testdf$exact_pval < 0.001
-  testdf$genes <- map(testdf$term, \(x) {
-    termgenes <- goslim |> filter(ORF %in% .idxs & GOslim_term == x) |> 
-      select(ORF) |> pull() |> unique()
-    return(reduce(termgenes, paste, sep = " "))
-  }) |> unlist()
-  
-  write_csv(arrange(testdf, exact_pval, desc(group_count)), 
-            file = paste0(.file_prefix, .group_name, ".csv"),
-            quote = "none", 
-            col_names = TRUE)
-  return(testdf)
+#### Visualize cluster expression patterns in each experiment ####
+display.brewer.all()
+load("data_files/CorrelationClustering3Disp.RData")
+# color palettes we'll use for the 6 environments
+palettedf <- tibble(experiment = c("CC", "HAP4", "LowN", "LowPi", "Cold", "Heat"),
+                    palette = c("YlGn", "Greys", "Greens", "Purples", "BuPu", "YlOrBr"),
+                    long_name = c("Cell Cycle", "Saturated Growth", "Low Nitrogen",
+                                  "Low Phosphorus", "Cold Stress", "Heat Stress"))
+
+plotClusterPatternByExperiment <- function(.df, .experiment, .title = NULL) {
+  plotdf <- summarise(group_by(.df, time_point_num, label),
+                      mean_expr = mean(expr, na.rm = TRUE)) |>
+    drop_na() # Heat/Cold have some genes with NA labels b/c they're not in the Fay dataset
+  plotdf$label <- as.factor(plotdf$label)
+  color_plt <- palettedf |> filter(experiment == .experiment) |> select(palette) |> pull()
+  if (is.null(.title)) {
+    .title <- palettedf |> filter(experiment == .experiment) |> select(long_name) |> pull()
+  }
+  ggplot(plotdf, aes(x = time_point_num, y = log2(mean_expr + 1))) +
+    geom_line(aes(group = label, color = label), linewidth = 4) +
+    geom_point(color = "black", alpha = 0.4) +
+    xlab("timepoint (min)") +
+    ylab("expression (log2)") +
+    scale_color_brewer(palette = color_plt, name = "cluster",
+                       direction = -1) +
+    theme_classic() +
+    theme(legend.position = "none") +
+    ggtitle(.title)
 }
-# tests for getGOSlimDf
-# test <- getGOSlimDf(.idxs = c("YGR192C", "YJR009C", "YJL052W"),
-#                     .group_name = "tdhs", .min_hits = 1)
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/cluster_ref.pdf",
+    width = 15, height = 3)
+ggarrange(plotClusterPatternByExperiment(clusterdf_list$HAP4_2$df, .experiment = "HAP4"),
+          plotClusterPatternByExperiment(clusterdf_list$CC_2$df, .experiment = "CC"),
+          plotClusterPatternByExperiment(clusterdf_list$LowN_2$df, .experiment = "LowN"),
+          plotClusterPatternByExperiment(clusterdf_list$LowPi_2$df, .experiment = "LowPi"),
+          plotClusterPatternByExperiment(clusterdf_list$Heat_2$df, .experiment = "Heat"),
+          plotClusterPatternByExperiment(clusterdf_list$Cold_2$df, .experiment = "Cold"),
+          nrow = 1, ncol = 6, common.legend = TRUE)
+dev.off()
+
+# most common Scer shape
+plotdf <- expand_grid(experiment = unique(clusterdf$experiment),
+            gene_ID = unique(clusterdf$gene_ID)) |>
+  left_join(y = clusterdf, by = c("gene_ID","experiment")) |>
+  arrange(experiment) |>
+  mutate(cer_clust = paste0(experiment, cer),
+         par_clust = paste0(experiment, par)) |>
+  ungroup() |>
+  group_by(gene_ID) |>
+  summarise(code_cer = reduce(cer_clust, .f = paste, sep = "_"),
+            code_par = reduce(par_clust, .f = paste, sep = "_"))
+sort(table(plotdf$code_cer), decreasing = TRUE)[1:30]
 
 #### Level divergence is consistent across environments ####
 # example level-diverging gene groups across all environments
@@ -160,7 +118,6 @@ at_least_1_idxs <- finaldf |> filter(level == "diverged") |>
   select(gene_name) |> pull() |> unique() |> intersect(y = colnames(levmat))
 
 # plotting
-library(circlize)
 col_fun = colorRamp2(c(-2, 0, 2), c("blue2", "lightyellow", "orange1"))
 pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/lev_heatmap.pdf",
     width = 7, height = 2.5)
@@ -260,6 +217,34 @@ for (i in 1:nrow(griddf)) {
 }
 
 #### Dynamics divergence is environment-specific ####
+### What are the most common environments for genes to diverge in dynamics together?
+finaldf |> select(gene_name, experiment, dynamics)
+
+plot_mat <- matrix(nrow = length(unique(finaldf$experiment)),
+                   ncol = length(unique(finaldf$gene_name)))
+for (e_row in unique(finaldf$experiment)) {
+  for (g_col in unique(finaldf$gene_name)) {
+    diverged_value <- finaldf |> filter(experiment == e_row & gene_name == g_col) |> 
+      select(dynamics) |> pull()
+    diverged_10 <- if_else(isTRUE(diverged_value == "diverged"),
+                           true = 1, false = 0, missing = 0)
+    cat(g_col, diverged_10, "\n")
+    plot_mat[which(unique(finaldf$experiment) == e_row),
+             which(unique(finaldf$gene_name) == g_col)] <- diverged_10
+  }
+}
+colnames(plot_mat) <- unique(finaldf$gene_name)
+rownames(plot_mat) <- unique(finaldf$experiment)
+
+# plotting
+col_fun = colorRamp2(c(0, 1), c("salmon", "aquamarine"))
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/env_divergence_heatmap.pdf",
+    width = 5, height = 3)
+Heatmap(plot_mat, col = col_fun,
+        row_order = unique(finaldf$experiment), column_order = unique(finaldf$gene_name),
+        row_names_side = "left", heatmap_legend_param = list(title = ""))
+dev.off()
+
 # Saturated growth 2-1
 gene_idxs <- finaldf |> filter(experiment == "HAP4" & group == "dyn21") |> 
   select(gene_name) |> pull()
@@ -274,7 +259,7 @@ plotExpressionProfileQuartet(.cts1 = collapsed$cer[gene_idxs,info$experiment %in
                              .method = "line",
                              .show_points = FALSE,
                              .show_confidence_intervals = TRUE,
-                             .normalization = "center",
+                             .normalization = "centered log2",
                              .plot_titles = TRUE)
 # What are these genes doing in other environments?
 ylims <- c(5.5, 8)
@@ -437,9 +422,7 @@ dev.off()
 # Y axis: environment those 2-1 or 1-2 divergers were ID'd in
 # X axis: how their dynamics divergence looks in other environments
 
-# How do we measure dynamics divergence? Correlation of avg expr between species,
-# Area Between Curves of average expression, Correlation of eahc gene's value at each TP?
-# Yes.
+# How do we measure dynamics divergence? Correlation of avg expr between species
 
 # Given gene idxs and experiment, 
 # returns between-species correlation
@@ -487,7 +470,7 @@ pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/
     width = 5, height = 3)
 Heatmap(plot_mat, col = col_fun,
         row_order = LongExperimentNames, column_order = LongExperimentNames,
-        row_names_side = "left", 
+        row_names_side = "left", heatmap_legend_param = list(title = ""),
         cell_fun = function(j, i, x, y, width, height, fill) {
           grid.text(sprintf("%.2f", plot_mat[i, j]), x, y, gp = gpar(fontsize = 10))
         })
@@ -515,11 +498,81 @@ pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/
     width = 5, height = 3)
 Heatmap(plot_mat, col = col_fun,
         row_order = LongExperimentNames, column_order = LongExperimentNames,
-        row_names_side = "left", 
+        row_names_side = "left", heatmap_legend_param = list(title = ""),
         cell_fun = function(j, i, x, y, width, height, fill) {
           grid.text(sprintf("%.2f", plot_mat[i, j]), x, y, gp = gpar(fontsize = 10))
         })
 dev.off()
+
+### Both 2-1 and 1-2 combined for presentation
+getDynamicsCorrBoth <- function(.gene_idxs12, .gene_idxs21,
+                                .experiment_name) {
+  condition_vec <- info |> filter(experiment == .experiment_name) |> 
+    select(condition) |> pull()
+  cer_vec12 <- collapsed$cer[.gene_idxs12, condition_vec] |> 
+    colMeans(na.rm = TRUE)
+  cer_vec21 <- collapsed$cer[.gene_idxs21, condition_vec] |> 
+    colMeans(na.rm = TRUE)
+  par_vec12 <- collapsed$par[.gene_idxs12, condition_vec] |> 
+    colMeans(na.rm = TRUE)
+  par_vec21 <- collapsed$par[.gene_idxs21, condition_vec] |> 
+    colMeans(na.rm = TRUE)
+  cor12 <- cor(cer_vec12, par_vec12)
+  cor21 <- cor(cer_vec21, par_vec21)
+  return(mean(c(cor12, cor21)))
+}
+
+# tests for getDynamicsCorrBoth
+# individual cors:
+gene_idxs12 <- finaldf |> filter(experiment == "Heat" &
+                                 cer == 1 & par == 2) |> 
+  select(gene_name) |> pull()
+testcor12 <- getDynamicsCorr(gene_idxs12, .experiment_name = "Heat")
+gene_idxs21 <- finaldf |> filter(experiment == "Heat" &
+                                 cer == 2 & par == 1) |> 
+  select(gene_name) |> pull()
+testcor21 <- getDynamicsCorr(gene_idxs21, .experiment_name = "Heat")
+# Heat 1-2 alone:
+testcor12
+# Heat 2-1 alone:
+testcor21
+# what both should be:
+mean(c(testcor12, testcor21))
+# Both 1-2 and 2-1:
+getDynamicsCorrBoth(.gene_idxs12 = gene_idxs12, 
+                    .gene_idxs21 = gene_idxs21, 
+                    .experiment_name = "Heat")
+
+# plotting
+plot_mat <- matrix(nrow = length(ExperimentNames),
+                   ncol = length(ExperimentNames))
+for (e_row in ExperimentNames) {
+  for (e_col in ExperimentNames) {
+    e_gene_idxs12 <- finaldf |> filter(experiment == e_row &
+                                         cer == 1 & par == 2) |> 
+      select(gene_name) |> pull()
+    e_gene_idxs21 <- finaldf |> filter(experiment == e_row &
+                                         cer == 2 & par == 1) |> 
+      select(gene_name) |> pull()
+    e_cor <- getDynamicsCorrBoth(.gene_idxs12 = e_gene_idxs12,
+                                 .gene_idxs21 = e_gene_idxs21,
+                                 .experiment_name = e_col)
+    plot_mat[which(ExperimentNames == e_row),
+             which(ExperimentNames == e_col)] <- e_cor
+  }
+}
+colnames(plot_mat) <- LongExperimentNames
+rownames(plot_mat) <- LongExperimentNames
+
+# plotting
+col_fun = colorRamp2(c(-1, 0, 1), c("red2", "white", "skyblue"))
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/heatmap_1221avg.pdf",
+    width = 5, height = 4)
+Heatmap(plot_mat, col = col_fun,
+        row_order = LongExperimentNames, column_order = LongExperimentNames,
+        row_names_side = "left", heatmap_legend_param = list(title = ""))
+dev.off()
+
 
 #### Supplemental figure: 6x6 plots of all expression divergence ####
 # instead of the heatmap, simply have a 6x6 grid of 
@@ -736,59 +789,7 @@ dev.off()
 # # Cold 2111 only visible in Cold
 # # Heat 2111 also visible in SatGrowth
 # 
-# #### Visualize cluster expression patterns in each experiment ####
-# display.brewer.all()
-# load("data_files/CorrelationClustering.RData")
-# # color palettes we'll use for the 6 environments
-# palettedf <- tibble(experiment = c("CC", "HAP4", "LowN", "LowPi", "Cold", "Heat"),
-#                     palette = c("YlGn", "Greys", "Greens", "Purples", "BuPu", "YlOrBr"),
-#                     long_name = c("Cell Cycle", "Saturated Growth", "Low Nitrogen",
-#                                   "Low Phosphorus", "Cold Stress", "Heat Stress"))
-# 
-# plotClusterPatternByExperiment <- function(.df, .experiment, .title = NULL) {
-#   plotdf <- summarise(group_by(.df, time_point_num, label),
-#                       mean_expr = mean(expr, na.rm = TRUE)) |> 
-#     drop_na() # Heat/Cold have some genes with NA labels b/c they're not in the Fay dataset
-#   plotdf$label <- as.factor(plotdf$label)
-#   color_plt <- palettedf |> filter(experiment == .experiment) |> select(palette) |> pull()
-#   if (is.null(.title)) {
-#     .title <- palettedf |> filter(experiment == .experiment) |> select(long_name) |> pull()
-#   }
-#   ggplot(plotdf, aes(x = time_point_num, y = log2(mean_expr + 1))) + 
-#     geom_line(aes(group = label, color = label), linewidth = 4) + 
-#     geom_point(color = "black", alpha = 0.4) +
-#     xlab("timepoint (min)") +
-#     ylab("expression (log2)") +
-#     scale_color_brewer(palette = color_plt, name = "cluster",
-#                        direction = -1) +
-#     theme_classic() +
-#     theme(legend.position = "none") +
-#     ggtitle(.title)
-# }
-# pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/cluster_ref.pdf",
-#     width = 15, height = 3)
-# ggarrange(plotClusterPatternByExperiment(clusterdf_list$HAP4_2$df, .experiment = "HAP4"),
-#           plotClusterPatternByExperiment(clusterdf_list$CC_2$df, .experiment = "CC"),
-#           plotClusterPatternByExperiment(clusterdf_list$LowN_2$df, .experiment = "LowN"),
-#           plotClusterPatternByExperiment(clusterdf_list$LowPi_2$df, .experiment = "LowPi"),
-#           plotClusterPatternByExperiment(clusterdf_list$Heat_2$df, .experiment = "Heat"),
-#           plotClusterPatternByExperiment(clusterdf_list$Cold_2$df, .experiment = "Cold"),
-#           nrow = 1, ncol = 6, common.legend = TRUE)
-# dev.off()
-# 
-# # most common Scer shape
-# plotdf <- expand_grid(experiment = unique(clusterdf$experiment), 
-#             gene_ID = unique(clusterdf$gene_ID)) |> 
-#   left_join(y = clusterdf, by = c("gene_ID","experiment")) |> 
-#   arrange(experiment) |> 
-#   mutate(cer_clust = paste0(experiment, cer),
-#          par_clust = paste0(experiment, par)) |> 
-#   ungroup() |> 
-#   group_by(gene_ID) |> 
-#   summarise(code_cer = reduce(cer_clust, .f = paste, sep = "_"), 
-#             code_par = reduce(par_clust, .f = paste, sep = "_"))
-# sort(table(plotdf$code_cer), decreasing = TRUE)[1:30]
-# 
+
 # #### Cluster conservation data wrangling ####
 # 
 # # given at least 2 vectors, checks if all of them are equal (order matters, NAs allowed)
