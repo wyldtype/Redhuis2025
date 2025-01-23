@@ -1,177 +1,73 @@
 #### QC: comparing power to detect DE genes upon TF deletion in each species ####
 sapply(c("dplyr", "purrr", "tidyr", "ggpubr", "readr", "data.table", "ggplot2", "data.table", "msir", "WGCNA", "energy"), require, character.only=TRUE)
-setwd("Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2024/")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025/")
 library(MASS, include.only = "glm.nb")
 
 # set constants
-coef_thresh <- 0.25 # minimum magnitude, so if it's < -coef_thresh, we also want that to be detected
+coef_thresh <- 1 # minimum magnitude, so if it's < -coef_thresh, we also want that to be detected
 p_thresh <- 1e-5
 
-# Goal #1: recapitulate power issue, where paradoxus has many more DE genes but moreso in Redhuis alignment
+# Goal #1: recapitulate power issue in non-DESeq2 models, examples:
+# YAP1 TP3 has stronger power in Scer than Spar
+# MET28 TP1 has stronger power in Spar than Scer
 
-#### Data cleaning ####
-# Redhuis alignment
-load(file = "data_files/Cleaned_Redhuis_Data.RData")
-load(file = "data_files/Cleaned_Redhuis_Data_AlleleSpecific.RData")
+### Cleaning data
+load(file = "data_files/TFdel.RData")
 
-#### Condition-matched counts/info for parents and hybrids ####
+# verify that counts are counts per million
+# Should have very little variation around libsize of 1mil
+hist(colSums(counts_tfdel, na.rm = TRUE))
+hist(colSums(counts_tfdel_allele, na.rm = TRUE))
 
-### condition-matching samples so that expression similarity can be calculated
-counts_cer <- counts[, sample_info$organism == "cer"] |> t()
-info_cer <- sample_info %>% filter(sample_name %in% rownames(counts_cer))
-counts_par <- counts[, sample_info$organism == "par"] |> t()
-info_par <- sample_info %>% filter(sample_name %in% rownames(counts_par))
-counts_hyc <- counts_allele[, sample_info_allele$organism == "hyb" & sample_info_allele$allele == "cer"] |> t()
-info_hyc <- sample_info_allele %>% filter(sample_name %in% rownames(counts_hyc))
-counts_hyp <- counts_allele[, sample_info_allele$organism == "hyb" & sample_info_allele$allele == "par"] |> t()
-info_hyp <- sample_info_allele %>% filter(sample_name %in% rownames(counts_hyp))
+infos_list <- list("cer_TP1" = filter(sample_info_tfdel, allele == "cer" &
+                                        time_point_str == "0 h, YPD"),
+                   "cer_TP2" = filter(sample_info_tfdel, allele == "cer" &
+                                        time_point_str == "1 h, low N"),
+                   "cer_TP3" = filter(sample_info_tfdel, allele == "cer" &
+                                        time_point_str == "16 h, low N"),
+                   "par_TP1" = filter(sample_info_tfdel, allele == "par" &
+                                        time_point_str == "0 h, YPD"),
+                   "par_TP2" = filter(sample_info_tfdel, allele == "par" &
+                                        time_point_str == "1 h, low N"),
+                   "par_TP3" = filter(sample_info_tfdel, allele == "par" &
+                                        time_point_str == "16 h, low N"),
+                   "hyc_TP1" = filter(sample_info_tfdel_allele, allele == "cer" &
+                                        time_point_str == "0 h, YPD"),
+                   "hyc_TP2" = filter(sample_info_tfdel_allele, allele == "cer" &
+                                        time_point_str == "1 h, low N"),
+                   "hyc_TP3" = filter(sample_info_tfdel_allele, allele == "cer" &
+                                        time_point_str == "16 h, low N"),
+                   "hyp_TP1" = filter(sample_info_tfdel_allele, allele == "par" &
+                                        time_point_str == "0 h, YPD"),
+                   "hyp_TP2" = filter(sample_info_tfdel_allele, allele == "par" &
+                                        time_point_str == "1 h, low N"),
+                   "hyp_TP3" = filter(sample_info_tfdel_allele, allele == "par" &
+                                        time_point_str == "16 h, low N"))
 
-# Filtering out conditions (combinations of genotype, experiment, and timepoint) that are not represented in cer, par, and hyb
-common_conditions <- bind_rows(info_cer, info_par, info_hyc, info_hyp) %>% 
-  select(condition, allele, organism) |> unique() %>% 
-  pivot_wider(id_cols = c("condition"), names_from = c("allele", "organism"), values_from = "organism") %>% 
-  drop_na() %>% 
-  select(condition) |> pull()
+counts_list <- map(infos_list, \(x) {
+  samples <- select(x, sample_name) |> pull()
+  cts <- cbind(counts_tfdel, counts_tfdel_allele)
+  return(cts[, samples])
+})
 
-# filtering down to common conditions
-info_cer <- filter(info_cer, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
-info_par <- filter(info_par, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
-info_hyc <- filter(info_hyc, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
-info_hyp <- filter(info_hyp, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
-
-# checking conditions are the same (these should both be 1)
-sum(unique(info_cer$condition) == unique(info_par$condition))/length(unique(info_cer$condition))
-sum(unique(info_hyc$condition) == unique(info_hyp$condition))/length(unique(info_hyc$condition))
-
-# paring down counts to match condition-matched info dfs
-counts_cer <- counts_cer[info_cer$sample_name,] # remember genes are COLUMNS in WGCNA
-counts_par <- counts_par[info_par$sample_name,]
-counts_hyc <- counts_hyc[info_hyc$sample_name,]
-counts_hyp <- counts_hyp[info_hyp$sample_name,]
-
-# splitting off TFdel dataset b/c replicates are useful for glm to tell how much unexplained variation there is
-infos_TFdel <- list(cer = info_cer[info_cer$experiment == "LowN",],
-                    par = info_par[info_par$experiment == "LowN",]) 
-counts_TFdel <- list(cer = counts_cer[info_cer$experiment == "LowN",], 
-                     par = counts_par[info_par$experiment == "LowN",])
-infos_TFdel_allele <- list(cer = info_hyc[info_hyc$experiment == "LowN",],
-                           par = info_hyp[info_hyp$experiment == "LowN",]) 
-counts_TFdel_allele <- list(cer = counts_hyc[info_hyc$experiment == "LowN",], 
-                            par = counts_hyp[info_hyp$experiment == "LowN",])
-
-# TF filtering: TF must have all at least 2 replicates 
-# as these lead to inaccurate glm.nb models below
-# cer
-goodTable_cer <- infos_TFdel$cer |> filter(genotype != "WT") |> 
-  select(condition) |> table()
-cer_vec <- sapply(goodTable_cer, \(x) {return(x >= 2)})
-goodConditions_cer <- rownames(goodTable_cer)[cer_vec]
-# par
-goodTable_par <- infos_TFdel$par |> filter(genotype != "WT") |> 
-  select(condition) |> table()
-par_vec <- sapply(goodTable_par, \(x) {return(x >= 2)})
-goodConditions_par <- rownames(goodTable_par)[par_vec]
-# hyc
-goodTable_hyc <- infos_TFdel_allele$cer |> filter(genotype != "WT") |> 
-  select(condition) |> table()
-hyc_vec <- sapply(goodTable_hyc, \(x) {return(x >= 2)})
-goodConditions_hyc <- rownames(goodTable_hyc)[hyc_vec]
-# hyp
-goodTable_hyp <- infos_TFdel_allele$par |> filter(genotype != "WT") |> 
-  select(condition) |> table()
-hyp_vec <- sapply(goodTable_hyp, \(x) {return(x >= 2)})
-goodConditions_hyp <- rownames(goodTable_hyp)[hyp_vec]
-# all
-goodConditions <- reduce(list(goodConditions_cer, goodConditions_par, goodConditions_hyc, goodConditions_hyp), 
-                         .f = intersect) # also ensuring the same set of TFs between species and hybrid
-# verifying these TFs do have all 6 timepoints x replicates in all 4 species/alleles
-goodTable_cer[goodConditions] |> min()
-goodTable_par[goodConditions] |> min()
-goodTable_hyc[goodConditions] |> min()
-goodTable_hyp[goodConditions] |> min() # should all have min 2
-
-# filtering
-redhuis_cts <- list(cer = counts_TFdel$cer[(infos_TFdel$cer$condition %in% goodConditions) | (infos_TFdel$cer$genotype == "WT"),],
-                    par = counts_TFdel$par[(infos_TFdel$par$condition %in% goodConditions) | (infos_TFdel$par$genotype == "WT"),])
-
-redhuis_info <- list(cer = infos_TFdel$cer[(infos_TFdel$cer$condition %in% goodConditions) | (infos_TFdel$cer$genotype == "WT"),],
-                     par = infos_TFdel$par[(infos_TFdel$par$condition %in% goodConditions) | (infos_TFdel$par$genotype == "WT"),])
-
-redhuis_cts_allele <- list(cer = counts_TFdel_allele$cer[(infos_TFdel_allele$cer$condition %in% goodConditions) | (infos_TFdel_allele$cer$genotype == "WT"),],
-                           par = counts_TFdel_allele$par[(infos_TFdel_allele$par$condition %in% goodConditions) | (infos_TFdel_allele$par$genotype == "WT"),])
-
-redhuis_info_allele <- list(cer = infos_TFdel_allele$cer[(infos_TFdel_allele$cer$condition %in% goodConditions) | (infos_TFdel_allele$cer$genotype == "WT"),],
-                            par = infos_TFdel_allele$par[(infos_TFdel_allele$par$condition %in% goodConditions) | (infos_TFdel_allele$par$genotype == "WT"),])
-
-rm(sample_info, sample_info_allele, counts, counts_allele,
-   counts_cer, counts_par, counts_hyc, counts_hyp)
-
-# repeat for Barkai
-load(file = "data_files/Cleaned_Barkai_Data.RData")
-load(file = "data_files/Cleaned_Barkai_Data_AlleleSpecific.RData")
-
-#### Condition-matched counts/info for parents and hybrids ####
-
-### condition-matching samples so that expression similarity can be calculated
-counts_cer <- counts[, sample_info$organism == "cer"] |> t()
-info_cer <- sample_info %>% filter(sample_name %in% rownames(counts_cer))
-counts_par <- counts[, sample_info$organism == "par"] |> t()
-info_par <- sample_info %>% filter(sample_name %in% rownames(counts_par))
-counts_hyc <- counts_allele[, sample_info_allele$organism == "hyb" & sample_info_allele$allele == "cer"] |> t()
-info_hyc <- sample_info_allele %>% filter(sample_name %in% rownames(counts_hyc))
-counts_hyp <- counts_allele[, sample_info_allele$organism == "hyb" & sample_info_allele$allele == "par"] |> t()
-info_hyp <- sample_info_allele %>% filter(sample_name %in% rownames(counts_hyp))
-
-# Filtering out conditions (combinations of genotype, experiment, and timepoint) that are not represented in cer, par, and hyb
-common_conditions <- bind_rows(info_cer, info_par, info_hyc, info_hyp) %>% 
-  select(condition, allele, organism) |> unique() %>% 
-  pivot_wider(id_cols = c("condition"), names_from = c("allele", "organism"), values_from = "organism") %>% 
-  drop_na() %>% 
-  select(condition) |> pull()
-
-# filtering down to common conditions
-info_cer <- filter(info_cer, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
-info_par <- filter(info_par, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
-info_hyc <- filter(info_hyc, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
-info_hyp <- filter(info_hyp, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
-
-# checking conditions are the same (these should both be 1)
-sum(unique(info_cer$condition) == unique(info_par$condition))/length(unique(info_cer$condition))
-sum(unique(info_hyc$condition) == unique(info_hyp$condition))/length(unique(info_hyc$condition))
-
-# paring down counts to match condition-matched info dfs
-counts_cer <- counts_cer[info_cer$sample_name,] # remember genes are COLUMNS in WGCNA
-counts_par <- counts_par[info_par$sample_name,]
-counts_hyc <- counts_hyc[info_hyc$sample_name,]
-counts_hyp <- counts_hyp[info_hyp$sample_name,]
-
-# splitting off TFdel dataset b/c replicates are useful for glm to tell how much unexplained variation there is
-infos_TFdel <- list(cer = info_cer[info_cer$experiment == "LowN",],
-                    par = info_par[info_par$experiment == "LowN",]) 
-counts_TFdel <- list(cer = counts_cer[info_cer$experiment == "LowN",], 
-                     par = counts_par[info_par$experiment == "LowN",])
-infos_TFdel_allele <- list(cer = info_hyc[info_hyc$experiment == "LowN",],
-                           par = info_hyp[info_hyp$experiment == "LowN",]) 
-counts_TFdel_allele <- list(cer = counts_hyc[info_hyc$experiment == "LowN",], 
-                            par = counts_hyp[info_hyp$experiment == "LowN",])
-
-# TF filtering: TF must have all at least 2 replicates 
-# filtering (goodConditions determined in Redhuis, and we verified that barkai included additional TFs without omitting any)
-barkai_cts <- list(cer = counts_TFdel$cer[(infos_TFdel$cer$condition %in% goodConditions) | (infos_TFdel$cer$genotype == "WT"),],
-                    par = counts_TFdel$par[(infos_TFdel$par$condition %in% goodConditions) | (infos_TFdel$par$genotype == "WT"),])
-
-barkai_info <- list(cer = infos_TFdel$cer[(infos_TFdel$cer$condition %in% goodConditions) | (infos_TFdel$cer$genotype == "WT"),],
-                     par = infos_TFdel$par[(infos_TFdel$par$condition %in% goodConditions) | (infos_TFdel$par$genotype == "WT"),])
-
-barkai_cts_allele <- list(cer = counts_TFdel_allele$cer[(infos_TFdel_allele$cer$condition %in% goodConditions) | (infos_TFdel_allele$cer$genotype == "WT"),],
-                           par = counts_TFdel_allele$par[(infos_TFdel_allele$par$condition %in% goodConditions) | (infos_TFdel_allele$par$genotype == "WT"),])
-
-barkai_info_allele <- list(cer = infos_TFdel_allele$cer[(infos_TFdel_allele$cer$condition %in% goodConditions) | (infos_TFdel_allele$cer$genotype == "WT"),],
-                            par = infos_TFdel_allele$par[(infos_TFdel_allele$par$condition %in% goodConditions) | (infos_TFdel_allele$par$genotype == "WT"),])
-
-rm(list = setdiff(ls(), c("redhuis_cts", "redhuis_cts_allele","redhuis_info", "redhuis_info_allele",
-                          "barkai_cts", "barkai_cts_allele","barkai_info", "barkai_info_allele",
-                          "coef_thresh", "p_thresh")))
+# test data : YAP1 in TP3, MET28 in TP1
+infos_list_test <- list("cer_YAP1" = filter(infos_list$cer_TP3,
+                                            genotype %in% c("WT", "YAP1delete")),
+                        "par_YAP1" = filter(infos_list$par_TP3,
+                                            genotype %in% c("WT", "YAP1delete")),
+                        "cer_MET28" = filter(infos_list$cer_TP1,
+                                             genotype %in% c("WT", "MET28delete")),
+                        "par_MET28" = filter(infos_list$par_TP1,
+                                             genotype %in% c("WT", "MET28delete")))
+infos_list_test <- map(infos_list_test, \(x) {
+  x$genotype <- droplevels(x$genotype)
+  return(x)
+})
+counts_list_test <- map(infos_list_test, \(x) {
+  samples <- select(x, sample_name) |> pull()
+  cts <- cbind(counts_tfdel, counts_tfdel_allele)
+  return(cts[, samples])
+})
 
 #### model fitting ####
 factorizeGenotypeAndTimepoint <- function(.info) {
@@ -185,39 +81,28 @@ factorizeGenotypeAndTimepoint <- function(.info) {
   }
   return(.info)
 }
-redhuis_info <- lapply(redhuis_info, factorizeGenotypeAndTimepoint)
-redhuis_info_allele <- lapply(redhuis_info_allele, factorizeGenotypeAndTimepoint)
-barkai_info <- lapply(barkai_info, factorizeGenotypeAndTimepoint)
-barkai_info_allele <- lapply(barkai_info_allele, factorizeGenotypeAndTimepoint)
+infos_list <- map(infos_list, factorizeGenotypeAndTimepoint)
 
-# verify that counts are counts per million
-test_cts <- barkai_cts_allele$cer
-test_rowIdx <- sample(c(1:nrow(test_cts)), 1)
-test_colIdx <- sample(c(1:ncol(test_cts)), 1)
-test_count <- test_cts[test_rowIdx, test_colIdx]
-((test_count/rowSums(test_cts, na.rm = TRUE)[test_rowIdx])*1e6) %>% round() # what it should be
-test_cts[test_rowIdx, test_colIdx] # what it is currently, should be the same, +/- 1 for rounding
-
-# # first exploring detecting which TF deletions a gene is DE in with a positive control
-# # Another good example is YLR307W (CDA1), a sporulation gene, has crazy high expression specifically in SUM1delete, a sporulation repressor, so that's cool, but we don't have SUM1data with replicates
-# gene_idx <- "YGR192C" # YGR192C (TDH3) in GCR2 delete
-# genedf <- bind_cols(tibble(expr = redhuis_cts$cer[,gene_idx]), redhuis_info$cer)
-# ggplot(genedf, aes(x = genotype, y = expr)) + geom_point() + scale_x_discrete(breaks = NULL)
-# modnb <- glm.nb(expr ~ time_point_str + genotype + time_point_str:genotype, data = genedf, link = log)
-# summary(modnb)
-# genedf$p_hat <- modnb$fitted.values
-# plotdf <- pivot_longer(genedf, cols = c(p_hat, expr))
-# ggplot(data = plotdf, aes(x = genotype, y = value)) +
-#   geom_point(aes(color = name, shape = as.factor(time_point_str))) +
-#   scale_x_discrete(breaks = NULL)
-# coeffs <- coef(modnb)[grepl("^genotype", names(coef(modnb)))]
-# pvals <- summary(modnb)$coefficients[,4][grepl("^genotype", names(coef(modnb)))]
-# sigGenotypes <- names(coeffs[abs(coeffs) > 0.5 & pvals < p_thresh]) %>% gsub(pattern = "genotype", replacement = "")
-# genedf$sig <- genedf$genotype %in% sigGenotypes
-# genedf$sig[genedf$genotype == "WT"] <- NA
-# ggplot(data = genedf, aes(x = genotype, y = expr)) +
-#   geom_point(aes(color = sig)) +
-#   theme(axis.text.x = element_text(angle = 90))
+# first exploring detecting which TF deletions a gene is DE in with a positive control
+gene_idx <- "YGR192C" # YGR192C (TDH3) in GCR2 delete
+genedf <- bind_cols(tibble(expr = counts_list$cer_TP1[gene_idx, ]), infos_list$cer_TP1)
+ggplot(genedf, aes(x = genotype, y = expr)) + geom_point() + scale_x_discrete(breaks = NULL)
+modnb <- glm.nb(expr ~ genotype, data = genedf, link = log)
+modpois <- glm(expr ~ genotype, data = genedf, family = poisson(link = "log"))
+summary(modnb)
+genedf$p_hat <- modnb$fitted.values
+plotdf <- pivot_longer(genedf, cols = c(p_hat, expr))
+ggplot(data = plotdf, aes(x = genotype, y = value)) +
+  geom_point(aes(color = name, shape = as.factor(time_point_str))) +
+  scale_x_discrete(breaks = NULL)
+coeffs <- coef(modnb)[grepl("^genotype", names(coef(modnb)))]
+pvals <- summary(modnb)$coefficients[,4][grepl("^genotype", names(coef(modnb)))]
+sigGenotypes <- names(coeffs[abs(coeffs) > 0.5 & pvals < p_thresh]) %>% gsub(pattern = "genotype", replacement = "")
+genedf$sig <- genedf$genotype %in% sigGenotypes
+genedf$sig[genedf$genotype == "WT"] <- NA
+ggplot(data = genedf, aes(x = genotype, y = expr)) +
+  geom_point(aes(color = sig)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 
 # now making it a function so we can apply it to all genes
 # @input: gene name, counts matrix (where rows are samples, cols are genes),
@@ -227,14 +112,10 @@ test_cts[test_rowIdx, test_colIdx] # what it is currently, should be the same, +
 #                                 3) name of which deletion each coefficient/pvalue corresponds to
 
 getTFdelModResultsByGene <- function(.gene_idx, .cts, .info, .mod_func) {
-  gdf <- bind_cols(tibble(expr = .cts[,.gene_idx]), .info)
-  gdf$genotype <- factor(gdf$genotype) |> relevel(ref = "WT")
-  gdf$time_point_str <- factor(gdf$time_point_str) |> relevel(ref = "0 h, YPD")
+  gdf <- bind_cols(tibble(expr = .cts[.gene_idx,]), .info)
   get1genemod <- function(del) {
     gdf2gen <- gdf |> filter(genotype %in% c("WT", del))
-    # filter out timepoints not present in deletion
-    goodTimes <- gdf2gen |> filter(genotype != "WT") |> select(time_point_str) |> pull() |> unique()
-    gdf2gen <- gdf2gen |> filter(time_point_str %in% goodTimes)
+    gdf2gen$genotype <- droplevels(gdf2gen$genotype)
     # fitting model
     m <- tryCatch({
       .mod_func(.data = gdf2gen)
@@ -259,146 +140,57 @@ getTFdelModResultsByGene <- function(.gene_idx, .cts, .info, .mod_func) {
   output$gene_name <- .gene_idx
   return(output)
 }
-# tests for getGenesAllTFdelCoeffs
-# test_result_cer <- getTFdelModResultsByGene("YGR192C", redhuis_cts$cer, redhuis_info$cer) # TDH3 should be way down when its direct regulator, GCR2, is deleted
-# test_result_cer$coef[test_result_cer$deletion == "GCR2"]
-# test_result_cer$pval[test_result_cer$deletion == "GCR2"]
-# test_result_par <- getTFdelModResultsByGene("YGR192C", redhuis_cts$par, redhuis_info$par)
-# test_result_par$coef[test_result_cer$deletion == "GCR2"]
-# test_result_par$pval[test_result_cer$deletion == "GCR2"]
-# # barkai alignment
-# test_result_cer <- getTFdelModResultsByGene("YGR192C", barkai_cts$cer, barkai_info$cer) # TDH3 should be way down when its direct regulator, GCR2, is deleted
-# test_result_cer$coef[test_result_cer$deletion == "GCR2"]
-# test_result_cer$pval[test_result_cer$deletion == "GCR2"]
-# test_result_par <- getTFdelModResultsByGene("YGR192C", barkai_cts$par, barkai_info$par)
-# test_result_par$coef[test_result_cer$deletion == "GCR2"]
-# test_result_par$pval[test_result_cer$deletion == "GCR2"]
-# 
-# # YKR034W is DAL80, so this is a negative control
-# test_result_cer <- getTFdelModResultsByGene("YKR034W", redhuis_cts$cer, redhuis_info$cer) # TDH3 should be way down when its direct regulator, GCR2, is deleted
-# test_result_cer$coef[test_result_cer$deletion == "DAL80"]
-# test_result_cer$pval[test_result_cer$deletion == "DAL80"]
-# test_result_par <- getTFdelModResultsByGene("YKR034W", redhuis_cts$par, redhuis_info$par)
-# test_result_par$coef[test_result_cer$deletion == "DAL80"]
-# test_result_par$pval[test_result_cer$deletion == "DAL80"]
-# # barkai alignment
-# test_result_cer <- getTFdelModResultsByGene("YKR034W", barkai_cts$cer, barkai_info$cer) # TDH3 should be way down when its direct regulator, GCR2, is deleted
-# test_result_cer$coef[test_result_cer$deletion == "DAL80"]
-# test_result_cer$pval[test_result_cer$deletion == "DAL80"]
-# test_result_par <- getTFdelModResultsByGene("YKR034W", barkai_cts$par, barkai_info$par)
-# test_result_par$coef[test_result_cer$deletion == "DAL80"]
-# test_result_par$pval[test_result_cer$deletion == "DAL80"]
-
+# models to compare
 mod_poisglm <- function(.data) {
-  m <- glm(expr ~ genotype + time_point_str, data = .data, family = poisson(link = "log"))
-  return(m)
-}
-mod_poisglm_int <- function(.data) {
-  m <- glm(expr ~ genotype * time_point_str, data = .data, family = poisson(link = "log"))
+  m <- glm(expr ~ genotype, data = .data, family = poisson(link = "log"))
   return(m)
 }
 mod_negbin <- function(.data) {
-  m <- glm.nb(expr ~ genotype + time_point_str, data = .data, link = log)
+  m <- glm.nb(expr ~ genotype, data = .data, link = log)
   return(m)
 }
-mod_negbin_int <- function(.data) {
-  m <- glm.nb(expr ~ genotype * time_point_str, data = .data, link = log)
-  return(m)
-}
-mod_notime <- function(.data) {
-  m <- glm(expr ~ genotype, data = .data, family = poisson(link = "log"))
-  return(m)
-} # this is a terrible idea but should have effect sizes exactly the same as standardized mean difference, so it's a good control
+# # tests for getTFdelModResultsByGene
+# getTFdelModResultsByGene(.gene_idx = "YGR192C",
+#                          .cts = counts_list_test$cer_YAP1,
+#                          .info = infos_list_test$cer_YAP1,
+#                          .mod_func = mod_poisglm)
 
-# fitting models
-TFdeldfs_pois <- map2(.x = list(redhuis_cts$cer, redhuis_cts$par, redhuis_cts_allele$cer, redhuis_cts_allele$par,
-                                barkai_cts$cer, barkai_cts$par, barkai_cts_allele$cer, barkai_cts_allele$par),
-                      .y = list(redhuis_info$cer, redhuis_info$par, redhuis_info_allele$cer, redhuis_info_allele$par,
-                                barkai_info$cer, barkai_info$par, barkai_info_allele$cer, barkai_info_allele$par),
+# fitting all models (takes 5eva)
+TFdeldfs_pois <- map2(.x = counts_list,
+                      .y = infos_list,
                       \(x, y) {
-                        output <- map_dfr(colnames(x), \(g) {
-                          cat("working on", g, which(colnames(x) == g), "/", ncol(x), "\n")
+                        output <- map(rownames(x), \(g) {
+                          cat(unique(y$allele), unique(y$time_point_str), 
+                              "pois working on", g, which(rownames(x) == g), "/", nrow(x), "\n")
                           return(getTFdelModResultsByGene(g, x, y, .mod_func = mod_poisglm))
-                        })
+                        }) |> purrr::reduce(.f = rbind)
                       })
-TFdeldfs_poisint <- map2(.x = list(redhuis_cts$cer, redhuis_cts$par, redhuis_cts_allele$cer, redhuis_cts_allele$par,
-                                   barkai_cts$cer, barkai_cts$par, barkai_cts_allele$cer, barkai_cts_allele$par),
-                         .y = list(redhuis_info$cer, redhuis_info$par, redhuis_info_allele$cer, redhuis_info_allele$par,
-                                   barkai_info$cer, barkai_info$par, barkai_info_allele$cer, barkai_info_allele$par),
-                         \(x, y) {
-                           output <- map_dfr(colnames(x), \(g) {
-                             cat("working on", g, which(colnames(x) == g), "/", ncol(x), "\n")
-                             return(getTFdelModResultsByGene(g, x, y, .mod_func = mod_poisglm_int))
-                           })
-                         })
-TFdeldfs_negbin <- map2(.x = list(redhuis_cts$cer, redhuis_cts$par, redhuis_cts_allele$cer, redhuis_cts_allele$par,
-                                  barkai_cts$cer, barkai_cts$par, barkai_cts_allele$cer, barkai_cts_allele$par),
-                        .y = list(redhuis_info$cer, redhuis_info$par, redhuis_info_allele$cer, redhuis_info_allele$par,
-                                  barkai_info$cer, barkai_info$par, barkai_info_allele$cer, barkai_info_allele$par),
+TFdeldfs_negbin <- map2(.x = counts_list,
+                        .y = infos_list,
                         \(x, y) {
-                          output <- map_dfr(colnames(x), \(g) {
-                            cat("working on", g, which(colnames(x) == g), "/", ncol(x), "\n")
+                          output <- map(rownames(x), \(g) {
+                            cat(unique(y$allele), unique(y$time_point_str), 
+                                "negbin working on", g, which(rownames(x) == g), "/", nrow(x), "\n")
                             return(getTFdelModResultsByGene(g, x, y, .mod_func = mod_negbin))
-                          })
+                          }) |> purrr::reduce(.f = rbind)
                         })
-TFdeldfs_negbinint <- map2(.x = list(redhuis_cts$cer, redhuis_cts$par, redhuis_cts_allele$cer, redhuis_cts_allele$par,
-                                  barkai_cts$cer, barkai_cts$par, barkai_cts_allele$cer, barkai_cts_allele$par),
-                        .y = list(redhuis_info$cer, redhuis_info$par, redhuis_info_allele$cer, redhuis_info_allele$par,
-                                  barkai_info$cer, barkai_info$par, barkai_info_allele$cer, barkai_info_allele$par),
-                        \(x, y) {
-                          output <- map_dfr(colnames(x), \(g) {
-                            cat("working on", g, which(colnames(x) == g), "/", ncol(x), "\n")
-                            return(getTFdelModResultsByGene(g, x, y, .mod_func = mod_negbin_int))
-                          })
-                        })
-TFdeldfs_notime <- map2(.x = list(redhuis_cts$cer, redhuis_cts$par, redhuis_cts_allele$cer, redhuis_cts_allele$par,
-                                  barkai_cts$cer, barkai_cts$par, barkai_cts_allele$cer, barkai_cts_allele$par),
-                        .y = list(redhuis_info$cer, redhuis_info$par, redhuis_info_allele$cer, redhuis_info_allele$par,
-                                  barkai_info$cer, barkai_info$par, barkai_info_allele$cer, barkai_info_allele$par),
-                        \(x, y) {
-                          output <- map_dfr(colnames(x), \(g) {
-                            cat("working on", g, which(colnames(x) == g), "/", ncol(x), "\n")
-                            return(getTFdelModResultsByGene(g, x, y, .mod_func = mod_notime))
-                          })
-                        })
-
-names(TFdeldfs_pois) <- c("redhuisdf_cer", "redhuisdf_par", "redhuisdf_hyc", "redhuisdf_hyp",
-                          "barkaidf_cer", "barkaidf_par", "barkaidf_hyc", "barkaidf_hyp")
-names(TFdeldfs_poisint) <- c("redhuisdf_cer", "redhuisdf_par", "redhuisdf_hyc", "redhuisdf_hyp",
-                          "barkaidf_cer", "barkaidf_par", "barkaidf_hyc", "barkaidf_hyp")
-names(TFdeldfs_negbin) <- c("redhuisdf_cer", "redhuisdf_par", "redhuisdf_hyc", "redhuisdf_hyp",
-                            "barkaidf_cer", "barkaidf_par", "barkaidf_hyc", "barkaidf_hyp")
-names(TFdeldfs_negbinint) <- c("redhuisdf_cer", "redhuisdf_par", "redhuisdf_hyc", "redhuisdf_hyp",
-                               "barkaidf_cer", "barkaidf_par", "barkaidf_hyc", "barkaidf_hyp")
-names(TFdeldfs_notime) <- c("redhuisdf_cer", "redhuisdf_par", "redhuisdf_hyc", "redhuisdf_hyp",
-                            "barkaidf_cer", "barkaidf_par", "barkaidf_hyc", "barkaidf_hyp")
 
 # converting natural log fold change to log2 fold change
 # e^x= 2^y
 # log2(e^x) = y
+# x*log2(e) = y
+# x*(1/log(2)) = y
 TFdeldfs_pois <- lapply(TFdeldfs_pois, \(x) {
-  x$coef <- log2(exp(x$coef))
-  return(x)
-})
-TFdeldfs_poisint <- lapply(TFdeldfs_poisint, \(x) {
-  x$coef <- log2(exp(x$coef))
+  x$coef <- x$coef/log(2)
   return(x)
 })
 TFdeldfs_negbin <- lapply(TFdeldfs_negbin, \(x) {
-  x$coef <- log2(exp(x$coef))
-  return(x)
-})
-TFdeldfs_negbinint <- lapply(TFdeldfs_negbinint, \(x) {
-  x$coef <- log2(exp(x$coef))
-  return(x)
-})
-TFdeldfs_notime <- lapply(TFdeldfs_notime, \(x) {
-  x$coef <- log2(exp(x$coef))
+  x$coef <- x$coef/log(2)
   return(x)
 })
 
 # standardized mean difference (https://cran.r-project.org/web/packages/TOSTER/vignettes/SMD_calcs.html)
-# with dots colored by p_value significance threshold
+# a measure of difference btween WT and TFdel to benchmark model effect sizes off of
 # standarized mean difference is calculated as:
 # (m2 - m1)/s_av
 # s_av = sqrt((sd1^2 + sd2^2)/2) (square root of the mean variance)
@@ -408,15 +200,12 @@ TFdeldfs_notime <- lapply(TFdeldfs_notime, \(x) {
 # + means the gene increased expr upon deletion, - means it decreased)
 getStandardizedMeanDiffByGene <- function(.gene_idx, .cts, .info) {
   cat("working on", .gene_idx, 
-      which(.gene_idx == colnames(redhuis_cts$cer)), 
-      "/", ncol(redhuis_cts$cer), "\n")
-  gdf <- bind_cols(tibble(expr = .cts[,.gene_idx]), .info)
-  gdf$genotype <- factor(gdf$genotype) |> relevel(ref = "WT")
+      which(.gene_idx == rownames(counts_tfdel)), 
+      "/", nrow(counts_tfdel), "\n")
+  gdf <- bind_cols(tibble(expr = .cts[.gene_idx,]), .info)
   get1geneSMD <- function(del) {
     gdf2gen <- gdf |> filter(genotype %in% c("WT", del))
-    # filter out timepoints not present in deletion
-    goodTimes <- gdf2gen |> filter(genotype != "WT") |> select(time_point_str) |> pull() |> unique()
-    gdf2gen <- gdf2gen |> filter(time_point_str %in% goodTimes)
+    gdf2gen$genotype <- droplevels(gdf2gen$genotype)
     # calculating SMD
     wt_vec <- filter(gdf2gen, genotype == "WT") |> select(expr) |> pull()
     del_vec <- filter(gdf2gen, genotype != "WT") |> select(expr) |> pull()
@@ -427,6 +216,7 @@ getStandardizedMeanDiffByGene <- function(.gene_idx, .cts, .info) {
     s_av <- sqrt((sd1^2 + sd2^2)/2)
     smd <- (m2-m1)/s_av
     return(list("smd" = smd,
+                "md" = (m2 - m1),
                 "deletion" = gsub("delete", "", del)))
   }
   output <- map_dfr(.x = setdiff(unique(gdf$genotype), "WT"),
@@ -436,37 +226,387 @@ getStandardizedMeanDiffByGene <- function(.gene_idx, .cts, .info) {
 }
 # # tests for getStandardizedMeanDiffByGene
 # # cer
-# getStandardizedMeanDiffByGene("YGR192C", redhuis_cts$cer, redhuis_info$cer) |> filter(deletion == "GCR2")
-# TFdeldfs_pois$redhuisdf_cer |> filter(deletion == "GCR2" & gene_name == "YGR192C")
-# TFdeldfs_poisint$redhuisdf_cer |> filter(deletion == "GCR2" & gene_name == "YGR192C")
-# TFdeldfs_negbin$redhuisdf_cer |> filter(deletion == "GCR2" & gene_name == "YGR192C")
-# TFdeldfs_negbinint$redhuisdf_cer |> filter(deletion == "GCR2" & gene_name == "YGR192C") # the no interaction term ones are significantly different than with interaction
-# # par
-# getStandardizedMeanDiffByGene("YGR192C", redhuis_cts$par, redhuis_info$par) |> filter(deletion == "GCR2")
-# TFdeldfs_pois$redhuisdf_par |> filter(deletion == "GCR2" & gene_name == "YGR192C")
-# TFdeldfs_poisint$redhuisdf_par |> filter(deletion == "GCR2" & gene_name == "YGR192C")
-# TFdeldfs_negbin$redhuisdf_par |> filter(deletion == "GCR2" & gene_name == "YGR192C")
-# TFdeldfs_negbinint$redhuisdf_par |> filter(deletion == "GCR2" & gene_name == "YGR192C") # pars are more consistent between models. Is this a common pattern?
+# getStandardizedMeanDiffByGene("YGR192C", counts_list$cer_TP1, infos_list$cer_TP1) |> filter(deletion == "GCR2")
 
-GeneNames <- colnames(redhuis_cts$cer)
-DeletionNames <- setdiff(unique(redhuis_info$cer$genotype), "WT") |> gsub(pattern = "delete", replacement = "")
-SMD_cer <- map(GeneNames, getStandardizedMeanDiffByGene, 
-               .cts = redhuis_cts$cer,
-               .info = redhuis_info$cer) |> reduce(.f = bind_rows)
-SMD_par <- map(GeneNames, getStandardizedMeanDiffByGene, 
-               .cts = redhuis_cts$par,
-               .info = redhuis_info$par) |> reduce(.f = bind_rows)
-SMDdf <- tibble(gene_name = rep(GeneNames, length(DeletionNames)),
-                deletion = rep(DeletionNames, length(GeneNames))) |> 
-  left_join(y = rename(SMD_cer, "cer"="smd"), by = c("gene_name", "deletion")) |> 
-  left_join(y = rename(SMD_par, "par"="smd"), by = c("gene_name", "deletion"))
+# applies getStandardizedMeanDiffByGene to all genes
+getStandardizedMeanDiff <- function(.cts, .info) {
+  output <- map(rownames(.cts), \(g) {
+    getStandardizedMeanDiffByGene(.gene_idx = g,
+                                  .cts = .cts,
+                                  .info = .info)
+  }) |> purrr::reduce(.f = bind_rows)
+  return(output)
+}
 
+SMDs <- map2(counts_list, infos_list,
+                  .f = getStandardizedMeanDiff)
+
+### making dataframes
+load("data_files/TFdel_DESeq2.RData")
+
+# Exploring both of these and DESeq2 results to determine if
+# differences in power btwn Scer and Spar are not seen in every model
+# (and how they relate to "ground-truth" of SMD)
+poisdf <- map2(TFdeldfs_pois,
+               names(TFdeldfs_pois),
+               \(x, y) {
+                 x$organism <- gsub(y, pattern = "_TP[0-9]",
+                                    replacement = "")
+                 x$timepoint <- gsub(y, pattern = "[cer_par_]",
+                                     replacement = "")
+                 return(x)
+               }) |> purrr::reduce(bind_rows) |> 
+  rename(c("coef_pois"="coef", "pval_pois"="pval"))
+
+negbindf <- map2(TFdeldfs_negbin,
+                 names(TFdeldfs_negbin),
+                 \(x, y) {
+                   x$organism <- gsub(y, pattern = "_TP[0-9]",
+                                      replacement = "")
+                   x$timepoint <- gsub(y, pattern = "[cer_par_]",
+                                       replacement = "")
+                   return(x)
+                 }) |> purrr::reduce(bind_rows) |> 
+  rename(c("coef_negbin"="coef", "pval_negbin"="pval"))
+
+SMDdf <- map2(SMDs,
+              names(SMDs),
+              \(x, y) {
+                x$organism <- gsub(y, pattern = "_TP[0-9]",
+                                   replacement = "")
+                x$timepoint <- gsub(y, pattern = "[cer_par_hyc_hyp_]",
+                                    replacement = "")
+                return(x)
+              }) |> purrr::reduce(bind_rows)
+
+qcdf <- left_join(poisdf,
+                  negbindf,
+                  by = c("gene_name", "organism", "deletion", "timepoint")) |> 
+  left_join(SMDdf, by = c("gene_name", "organism", "deletion", "timepoint")) |> 
+  left_join(y = TFdeldf, by = c("gene_name", "organism", "deletion", "timepoint"))
+
+# Filtering for genes with high enough expression in LowN
+load("data_files/FinalDataframe3Disp.RData")
+qcdf <- filter(qcdf, gene_name %in% unlist(finaldf[finaldf$experiment == "LowN",
+                                                   "gene_name"]))
+
+#### QC Exploration ####
+
+# are effect size estimates and SMD correlated?
+# negbin and SMD
+ggplot(slice_sample(filter(qcdf, pval_negbin < p_thresh), n = 10000),
+       aes(x = smd, y = coef_negbin)) +
+  geom_point(aes(color = coef_negbin > 0)) # certainly none go in opposite directions
+sum(sign(qcdf$smd) != sign(qcdf$coef_negbin) & qcdf$pval_negbin < p_thresh, na.rm = TRUE)
+# pois and SMD
+ggplot(slice_sample(filter(qcdf, pval_pois < p_thresh), n = 10000),
+       aes(x = smd, y = coef_pois)) +
+  geom_point(aes(color = coef_pois > 0)) # perhaps more correlated
+sum(sign(qcdf$smd) != sign(qcdf$coef_pois) & qcdf$pval_pois < p_thresh, na.rm = TRUE)
+# negbin and pois
+ggplot(slice_sample(filter(qcdf, pval_pois < p_thresh), n = 10000),
+       aes(x = coef_negbin, y = coef_pois)) +
+  geom_point() # nevermind, they're the same
+identical_idxs <- map2(qcdf$coef_pois, qcdf$coef_negbin, identical) |> unlist() 
+sum(identical_idxs) # not exact, but close. Probably stochasticity around the negbin iterative algorithm
+# SMD and DESeq2
+ggplot(slice_sample(filter(qcdf, padj < p_thresh), n = 10000),
+       aes(x = smd, y = lfc)) +
+  geom_point(aes(color = lfc > 0))
+# pois and DESeq2
+ggplot(filter(qcdf, padj < 0.05),
+       aes(x = coef_pois, y = lfc)) +
+  geom_point(aes(color = lfc > 0)) 
+# mostly very related, but there's a group with very strong 
+# negative effects that pois weren't calling DE:
+source("functions_for_figure_scripts.R")
+load("data_files/Cleaned_Counts.RData")
+load("data_files/Cleaned_Counts_Allele.RData")
+v_neg_genes <- filter(qcdf, ((padj < 0.05) | (pval_pois < p_thresh)) & 
+                        coef_pois < -20)
+v_neg_genes$deletion |> table() |> sort(decreasing = TRUE)
+v_neg_genes$timepoint |> table() |> sort(decreasing = TRUE)
+v_neg_genes$gene_name |> table() |> sort(decreasing = TRUE)
+v_neg_genes |> filter(deletion == "GAT1")
+counts_tfdel["YHR096C", sample_info_tfdel$organism == "par" &
+               sample_info_tfdel$genotype == "SUM1delete" &
+               sample_info_tfdel$time_point_str == "16 h, low N"] # HXT5, there are 2 replicates --- just both 0
+plotGenesTFdel(.gene_idxs = "YHR096C", .tf = "SUM1") # This is real. SUM1 delete shuts off this gene in Spar
+plotGenesTFdel(.gene_idxs = "YHR096C", .tf = "GAT1")
+counts_tfdel["YBR145W", sample_info_tfdel$organism == "cer" &
+               sample_info_tfdel$genotype == "GCN4delete" &
+               sample_info_tfdel$time_point_str == "16 h, low N"]
+counts_tfdel["YBL043W", sample_info_tfdel$organism == "cer" &
+               sample_info_tfdel$genotype == "GCN4delete" &
+               sample_info_tfdel$time_point_str == "16 h, low N"]
+plotGenesTFdel(.gene_idxs = "YBR145W", .tf = "GCN4")
+plotGenesTFdel(.gene_idxs = "YBL043W", .tf = "GCN4") # ADH5 and ECM13
+# conclusion: these appear to be true effect sizes: these genes are shut off by these TF deletions
+
+### Case examples
+# Are there differences in coef/pval for Scer vs Spar?
+# MET28 TP1, no DE genes in Scer
+# pois, pvals not adjusted for multiple testing
+plotdf <- filter(qcdf, organism == "cer" & deletion == "MET28" & timepoint == "TP1")
+ggplot(plotdf, aes(x = coef_pois, y = -log10(pval_pois))) +
+  geom_point(aes(color = pval_pois < p_thresh)) +
+  xlim(c(-10, 10))
+plotdf <- filter(qcdf, organism == "par" & deletion == "MET28" & timepoint == "TP1")
+ggplot(plotdf, aes(x = coef_pois, y = -log10(pval_pois))) +
+  geom_point(aes(color = pval_pois < p_thresh)) +
+  xlim(c(-10, 10)) # magnitudes are genuniely smaller for Scer
+filter(qcdf, organism == "cer" & deletion == "MET28" & timepoint == "TP1" &
+         pval_pois < p_thresh & abs(coef_pois) > coef_thresh) |> nrow()
+filter(qcdf, organism == "par" & deletion == "MET28" & timepoint == "TP1" &
+         pval_pois < p_thresh & abs(coef_pois) > coef_thresh) |> nrow()
+# DESeq2
+plotdf <- filter(qcdf, organism == "cer" & deletion == "MET28" & timepoint == "TP1")
+ggplot(plotdf, aes(x = lfc, y = -log10(padj))) +
+  geom_point(aes(color = padj < p_thresh)) +
+  xlim(c(-10, 10)) +
+  ylim(c(0, 30))
+plotdf <- filter(qcdf, organism == "par" & deletion == "MET28" & timepoint == "TP1")
+ggplot(plotdf, aes(x = lfc, y = -log10(padj))) +
+  geom_point(aes(color = padj < p_thresh)) +
+  xlim(c(-10, 10)) +
+  ylim(c(0, 30))
+filter(qcdf, organism == "cer" & deletion == "MET28" & timepoint == "TP1" &
+         padj < p_thresh & abs(lfc) > coef_thresh) |> nrow()
+filter(qcdf, organism == "par" & deletion == "MET28" & timepoint == "TP1" &
+         padj < p_thresh & abs(lfc) > coef_thresh) |> nrow()
+
+# YAP1 TP3, few DE genes in Spar
+# pois, pvals not adjusted for multiple testing
+plotdf <- filter(qcdf, organism == "cer" & deletion == "YAP1" & timepoint == "TP3")
+ggplot(plotdf, aes(x = coef_pois, y = -log10(pval_pois))) +
+  geom_point(aes(color = pval_pois < p_thresh)) +
+  xlim(c(-10, 10))
+plotdf <- filter(qcdf, organism == "par" & deletion == "YAP1" & timepoint == "TP3")
+ggplot(plotdf, aes(x = coef_pois, y = -log10(pval_pois))) +
+  geom_point(aes(color = pval_pois < p_thresh)) +
+  xlim(c(-10, 10)) # I don't see a diference
+filter(qcdf, organism == "cer" & deletion == "YAP1" & timepoint == "TP3" &
+         pval_pois < p_thresh & abs(coef_pois) > coef_thresh) |> nrow()
+filter(qcdf, organism == "par" & deletion == "YAP1" &  timepoint == "TP3" &
+         pval_pois < p_thresh & abs(coef_pois) > coef_thresh) |> nrow() # but there is a difference, Spar has 1/4 as many
+# DESeq2
+plotdf <- filter(qcdf, organism == "cer" & deletion == "YAP1" & timepoint == "TP3")
+ggplot(plotdf, aes(x = lfc, y = -log10(padj))) +
+  geom_point(aes(color = padj < p_thresh)) +
+  xlim(c(-10, 10)) +
+  ylim(c(0, 30))
+plotdf <- filter(qcdf, organism == "par" & deletion == "YAP1" & timepoint == "TP3")
+ggplot(plotdf, aes(x = lfc, y = -log10(padj))) +
+  geom_point(aes(color = padj < p_thresh)) +
+  xlim(c(-10, 10)) +
+  ylim(c(0, 30))
+filter(qcdf, organism == "cer" & deletion == "YAP1" &
+         padj < p_thresh & abs(lfc) > coef_thresh) |> nrow()
+filter(qcdf, organism == "par" & deletion == "YAP1" &
+         padj < p_thresh & abs(lfc) > coef_thresh) |> nrow()
+
+# How do these vals compare to "gold standard" SMD?
+# Are there more high SMD values for the species with more DE Genes?
+ggplot(filter(qcdf, (deletion == "MET28" & timepoint == "TP1") |
+                (deletion == "YAP1" & timepoint == "TP3")), aes(x = interaction(organism, deletion),
+                   y = smd)) +
+  geom_violin(aes(fill = smd < 0))
+filter(qcdf, organism == "cer" & deletion == "YAP1" & timepoint == "TP3" &
+         abs(smd) > 3) |> nrow()
+filter(qcdf, organism == "par" & deletion == "YAP1" & timepoint == "TP3" &
+         abs(smd) > 3) |> nrow()
+filter(qcdf, organism == "cer" & deletion == "MET28" & timepoint == "TP1" &
+         abs(smd) > 3) |> nrow()
+filter(qcdf, organism == "par" & deletion == "MET28" & timepoint == "TP1" &
+         abs(smd) > 3) |> nrow()
+# There are indeed smaller SMDs in the organism without DE genes
+
+# Mean difference Scer vs Spar
+# MD is related to expression level, so these will have to be
+# paired observations for each gene in Scer and Spar
+# MET28
+plotdf <- filter(qcdf, deletion == "MET28" & timepoint == "TP1") |> 
+  pivot_wider(id_cols = "gene_name", names_from = "organism", values_from = "md")
+ggplot(plotdf, aes(x = log2(abs(cer) + 1),
+                   y = log2(abs(par) + 1))) + 
+  geom_hex() +
+  geom_abline(slope = 1, intercept = 0, color = "red") # Spar has higher (magnitude) MDs
+sum(abs(plotdf$cer) > abs(plotdf$par))
+sum(abs(plotdf$cer) < abs(plotdf$par))
+# YAP1
+plotdf <- filter(qcdf, deletion == "YAP1" & timepoint == "TP3") |> 
+  pivot_wider(id_cols = "gene_name", names_from = "organism", values_from = "md")
+ggplot(plotdf, aes(x = log2(abs(cer) + 1),
+                   y = log2(abs(par) + 1))) + 
+  geom_hex() +
+  geom_abline(slope = 1, intercept = 0, color = "red") # Scer has higher (magnitude MDs)
+sum(abs(plotdf$cer) > abs(plotdf$par))
+sum(abs(plotdf$cer) < abs(plotdf$par))
+
+#### Supplemental figure: TFdel power QC ####
+# TODO: supplemental plot once you've run all deletions/organisms/timepoints
+# showing that the TFdeldf, pois, glm.nb, and SMD counts for numbers of DE genes
+# Show the same divergence in nDE genes between species
+
+# DESeq2 and glm pois make largely similar estimates of fold change
+library(ggExtra)
+plotdf <- filter(drop_na(qcdf), (pval_pois < p_thresh) | (padj < 0.05))
+p <- ggplot(plotdf, 
+       aes(x = coef_pois, y = lfc)) + 
+  geom_point(aes(color = if_else(padj < 0.05,
+                                 true = if_else(pval_pois < p_thresh,
+                                                true = "sig both",
+                                                false = "sig DESeq2"),
+                                 false = if_else(pval_pois < p_thresh,
+                                                 true = "sig glm",
+                                                 false = "nonsig both")))) +
+  theme(legend.title = element_blank(),
+        legend.position = "bottom") +
+  ggtitle(paste0("n = ", nrow(plotdf)))
+pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/glmVsDESeq2.pdf",
+    width = 7, height = 7)
+ggMarginal(p, groupColour = TRUE, groupFill = TRUE)
+dev.off()
+
+# cluster with very negative fold change that's only sig in DESeq2 
+# is of genes with fully 0 counts upon TFdel:
+table(v_neg_genes$organism) # note they happen to only be parental observations
+plotdf <- map(1:nrow(v_neg_genes), \(i) {
+  org <- v_neg_genes$organism[i]
+  tfdel <- v_neg_genes$deletion[i]
+  g <- v_neg_genes$gene_name[i]
+  tp <- v_neg_genes$timepoint[i]
+  tp_str <- if_else(tp == "TP1",
+                    true = "0 h, YPD",
+                    false = if_else(tp == "TP2",
+                                    true = "1 h, low N",
+                                    false = "16 h, low N"))
+  wt_avg_expr <- counts_tfdel[g,sample_info_tfdel$organism == org &
+                                sample_info_tfdel$genotype == "WT" &
+                                sample_info_tfdel$time_point_str == tp_str] |> 
+    mean()
+  outdf <- tibble(gene_name = g,
+                  organism = org,
+                  deletion = tfdel,
+                  timepoint = tp,
+                  wt_avg_expr = wt_avg_expr,
+                  expr = counts_tfdel[g,sample_info_tfdel$organism == org &
+                                        sample_info_tfdel$genotype == paste0(tfdel, "delete") &
+                                        sample_info_tfdel$time_point_str == tp_str])
+  return(outdf)
+}) |> purrr::reduce(bind_rows)
+plotdf <- left_join(plotdf, v_neg_genes,
+                    by = c("gene_name", "organism", "deletion", "timepoint"),
+                    relationship = "many-to-one") |> 
+  pivot_longer(cols = c("wt_avg_expr", "expr"), 
+               names_to = "genotype", values_to = "expr")
+plotdf$genotype <- if_else(plotdf$genotype == "wt_avg_expr",
+                           true = "WT", false = "TFdel")
+
+pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/glmVsDESeq2_negGroup.pdf",
+    width = 3, height = 2.5)
+ggplot(plotdf, aes(x = genotype, y = expr)) +
+  geom_line(aes(group = interaction(deletion, gene_name, timepoint, organism)),
+            color = "#00BA38") +
+  theme_classic() +
+  scale_x_discrete(breaks = c("WT", "TFdel"),
+                   labels = c("WT", "TFdel"),
+                   limits = c("WT", "TFdel")) +
+  ggtitle(paste0("n = ", nrow(unique(select(plotdf, deletion, gene_name, timepoint, organism)))))
+dev.off()
+
+### Heatmap of SMD over a threshold instead of nDE genes
+library(ComplexHeatmap)
+library(circlize)
+# Copy-pasted from TFdel figure script
+parent_tf_tab <- sample_info_tfdel |> filter(time_point_str == "0 h, YPD" &
+                                               genotype != "WT") |> 
+  select(genotype, organism) |> table()
+parent_goodf_tfs_tp1 <- rownames(parent_tf_tab)[apply(parent_tf_tab, 1, \(x) {all(x > 1)})] |> 
+  gsub(pattern = "delete", replacement = "")
+parent_goodf_tfs_tp1
+# TFs with 2 replicates at TP3 in cer/par:
+parent_tf_tab <- sample_info_tfdel |> filter(time_point_str == "16 h, low N" &
+                                               genotype != "WT") |> 
+  select(genotype, organism) |> table()
+parent_goodf_tfs_tp3 <- rownames(parent_tf_tab)[apply(parent_tf_tab, 1, \(x) {all(x > 1)})] |> 
+  gsub(pattern = "delete", replacement = "")
+parent_goodf_tfs_tp3
+# TFs with 2 replicates at TP1 in hyc/hyp:
+hybrid_tf_tab <- sample_info_tfdel_allele |> filter(time_point_str == "0 h, YPD" &
+                                                      genotype != "WT") |> 
+  select(genotype, allele) |> table()
+hybrid_goodf_tfs_tp1 <- rownames(hybrid_tf_tab)[apply(hybrid_tf_tab, 1, \(x) {all(x > 1)})] |> 
+  gsub(pattern = "delete", replacement = "")
+hybrid_goodf_tfs_tp1
+# TFs with 2 replicates at TP2 in hyc/hyp:
+hybrid_tf_tab <- sample_info_tfdel_allele |> filter(time_point_str == "1 h, low N" &
+                                                      genotype != "WT") |> 
+  select(genotype, allele) |> table()
+hybrid_goodf_tfs_tp2 <- rownames(hybrid_tf_tab)[apply(hybrid_tf_tab, 1, \(x) {all(x > 1)})] |> 
+  gsub(pattern = "delete", replacement = "")
+hybrid_goodf_tfs_tp2
+# TFs with 2 replicates at TP3 in hyc/hyp:
+hybrid_tf_tab <- sample_info_tfdel_allele |> filter(time_point_str == "16 h, low N" &
+                                                      genotype != "WT") |> 
+  select(genotype, allele) |> table()
+hybrid_goodf_tfs_tp3 <- rownames(hybrid_tf_tab)[apply(hybrid_tf_tab, 1, \(x) {all(x > 1)})] |> 
+  gsub(pattern = "delete", replacement = "")
+hybrid_goodf_tfs_tp3
+# TFs with 2 replicates in parents for both timepoints:
+goodTFs <- intersect(parent_goodf_tfs_tp1, parent_goodf_tfs_tp3)
+goodTFs
+# rows missing from hybrid TP1:
+setdiff(goodTFs, hybrid_goodf_tfs_tp1)
+# rows missing from hybrid TP3:
+setdiff(goodTFs, hybrid_goodf_tfs_tp3)
+
+effectsdf <- SMDdf |> 
+  filter(abs(smd) > 3 & 
+           timepoint != "TP2" &
+           deletion %in% goodTFs) |> 
+  group_by(deletion, organism, timepoint) |> 
+  summarise(nGenes = n()) |> 
+  pivot_wider(id_cols = c("deletion"), 
+              names_from = c("organism", "timepoint"), 
+              values_from = "nGenes") |> 
+  ungroup()
+effects_mat <- select(effectsdf, -deletion) |> as.matrix()
+rownames(effects_mat) <- effectsdf$deletion
+effects_mat[is.na(effects_mat)] <- 0 # because we already eliminated TFs without replicates, any NAs come from missing combinations in group_by
+# adding back NAs for missing TFs in the hybrid
+# TP1
+effects_mat[rownames(effects_mat) %in% setdiff(goodTFs, hybrid_goodf_tfs_tp1), 
+            colnames(effects_mat) %in% c("hyc_TP1", "hyp_TP1")] <- NA
+# # TP2
+# effects_mat[rownames(effects_mat) %in% setdiff(goodTFs, hybrid_goodf_tfs_tp2), 
+#             colnames(effects_mat) %in% c("hyc_TP2", "hyp_TP2")] <- NA
+# TP3
+effects_mat[rownames(effects_mat) %in% setdiff(goodTFs, hybrid_goodf_tfs_tp3), 
+            colnames(effects_mat) %in% c("hyc_TP3", "hyp_TP3")] <- NA
+
+col_fun <- colorRamp2(c(0, 50, 300), c("blue", "yellow", "red"))
+p <- Heatmap(effects_mat, col = col_fun, na_col = "grey80",
+             column_order = c("cer_TP1", "par_TP1", "cer_TP3", "par_TP3", 
+                              "hyc_TP1", "hyp_TP1", "hyc_TP3", "hyp_TP3"),
+             # row_order = tf_order,
+             cell_fun = function(j, i, x, y, width, height, fill) {
+               output <- if_else(!(is.na(effects_mat[i, j])), 
+                                 true = as.character(effects_mat[i, j]), 
+                                 false = "-")
+               grid.text(output, x, y, gp = gpar(fontsize = 10))
+             })
+
+pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/TFdel_SMD_heatmap.pdf", 
+    width = 5, height = 8)
+p
+dev.off()
 
 # saving
-save(TFdeldfs_pois, TFdeldfs_poisint,
-     TFdeldfs_negbin, TFdeldfs_negbinint,
-     TFdeldfs_notime,
-     SMDdf, file = "data_files/QC_TFdel.RData")
+save(TFdeldfs_pois,
+     TFdeldfs_negbin,
+     SMDs, SMDdf, poisdf, 
+     qcdf, file = "data_files/QC_TFdel.RData")
 load(file = "data_files/QC_TFdel.RData")
 
 
@@ -1167,3 +1307,164 @@ gene_idx <- "YNL065W"
 
 # Note: YNL065W no longer seems like a good example --- not 
 # obviously more DE in GLN3delete (it's really just lowly expressed and noisy)
+
+######################## Archive ##############################
+#### Pre-Data script data cleaning ####
+# #### Condition-matched counts/info for parents and hybrids ####
+# 
+# ### condition-matching samples so that expression similarity can be calculated
+# counts_cer <- counts[, sample_info$organism == "cer"] |> t()
+# info_cer <- sample_info %>% filter(sample_name %in% rownames(counts_cer))
+# counts_par <- counts[, sample_info$organism == "par"] |> t()
+# info_par <- sample_info %>% filter(sample_name %in% rownames(counts_par))
+# counts_hyc <- counts_allele[, sample_info_allele$organism == "hyb" & sample_info_allele$allele == "cer"] |> t()
+# info_hyc <- sample_info_allele %>% filter(sample_name %in% rownames(counts_hyc))
+# counts_hyp <- counts_allele[, sample_info_allele$organism == "hyb" & sample_info_allele$allele == "par"] |> t()
+# info_hyp <- sample_info_allele %>% filter(sample_name %in% rownames(counts_hyp))
+# 
+# # Filtering out conditions (combinations of genotype, experiment, and timepoint) that are not represented in cer, par, and hyb
+# common_conditions <- bind_rows(info_cer, info_par, info_hyc, info_hyp) %>% 
+#   select(condition, allele, organism) |> unique() %>% 
+#   pivot_wider(id_cols = c("condition"), names_from = c("allele", "organism"), values_from = "organism") %>% 
+#   drop_na() %>% 
+#   select(condition) |> pull()
+# 
+# # filtering down to common conditions
+# info_cer <- filter(info_cer, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
+# info_par <- filter(info_par, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
+# info_hyc <- filter(info_hyc, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
+# info_hyp <- filter(info_hyp, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
+# 
+# # checking conditions are the same (these should both be 1)
+# sum(unique(info_cer$condition) == unique(info_par$condition))/length(unique(info_cer$condition))
+# sum(unique(info_hyc$condition) == unique(info_hyp$condition))/length(unique(info_hyc$condition))
+# 
+# # paring down counts to match condition-matched info dfs
+# counts_cer <- counts_cer[info_cer$sample_name,] # remember genes are COLUMNS in WGCNA
+# counts_par <- counts_par[info_par$sample_name,]
+# counts_hyc <- counts_hyc[info_hyc$sample_name,]
+# counts_hyp <- counts_hyp[info_hyp$sample_name,]
+# 
+# # splitting off TFdel dataset b/c replicates are useful for glm to tell how much unexplained variation there is
+# infos_TFdel <- list(cer = info_cer[info_cer$experiment == "LowN",],
+#                     par = info_par[info_par$experiment == "LowN",]) 
+# counts_TFdel <- list(cer = counts_cer[info_cer$experiment == "LowN",], 
+#                      par = counts_par[info_par$experiment == "LowN",])
+# infos_TFdel_allele <- list(cer = info_hyc[info_hyc$experiment == "LowN",],
+#                            par = info_hyp[info_hyp$experiment == "LowN",]) 
+# counts_TFdel_allele <- list(cer = counts_hyc[info_hyc$experiment == "LowN",], 
+#                             par = counts_hyp[info_hyp$experiment == "LowN",])
+# 
+# # TF filtering: TF must have all at least 2 replicates 
+# # as these lead to inaccurate glm.nb models below
+# # cer
+# goodTable_cer <- infos_TFdel$cer |> filter(genotype != "WT") |> 
+#   select(condition) |> table()
+# cer_vec <- sapply(goodTable_cer, \(x) {return(x >= 2)})
+# goodConditions_cer <- rownames(goodTable_cer)[cer_vec]
+# # par
+# goodTable_par <- infos_TFdel$par |> filter(genotype != "WT") |> 
+#   select(condition) |> table()
+# par_vec <- sapply(goodTable_par, \(x) {return(x >= 2)})
+# goodConditions_par <- rownames(goodTable_par)[par_vec]
+# # hyc
+# goodTable_hyc <- infos_TFdel_allele$cer |> filter(genotype != "WT") |> 
+#   select(condition) |> table()
+# hyc_vec <- sapply(goodTable_hyc, \(x) {return(x >= 2)})
+# goodConditions_hyc <- rownames(goodTable_hyc)[hyc_vec]
+# # hyp
+# goodTable_hyp <- infos_TFdel_allele$par |> filter(genotype != "WT") |> 
+#   select(condition) |> table()
+# hyp_vec <- sapply(goodTable_hyp, \(x) {return(x >= 2)})
+# goodConditions_hyp <- rownames(goodTable_hyp)[hyp_vec]
+# # all
+# goodConditions <- reduce(list(goodConditions_cer, goodConditions_par, goodConditions_hyc, goodConditions_hyp), 
+#                          .f = intersect) # also ensuring the same set of TFs between species and hybrid
+# # verifying these TFs do have all 6 timepoints x replicates in all 4 species/alleles
+# goodTable_cer[goodConditions] |> min()
+# goodTable_par[goodConditions] |> min()
+# goodTable_hyc[goodConditions] |> min()
+# goodTable_hyp[goodConditions] |> min() # should all have min 2
+# 
+# # filtering
+# redhuis_cts <- list(cer = counts_TFdel$cer[(infos_TFdel$cer$condition %in% goodConditions) | (infos_TFdel$cer$genotype == "WT"),],
+#                     par = counts_TFdel$par[(infos_TFdel$par$condition %in% goodConditions) | (infos_TFdel$par$genotype == "WT"),])
+# 
+# redhuis_info <- list(cer = infos_TFdel$cer[(infos_TFdel$cer$condition %in% goodConditions) | (infos_TFdel$cer$genotype == "WT"),],
+#                      par = infos_TFdel$par[(infos_TFdel$par$condition %in% goodConditions) | (infos_TFdel$par$genotype == "WT"),])
+# 
+# redhuis_cts_allele <- list(cer = counts_TFdel_allele$cer[(infos_TFdel_allele$cer$condition %in% goodConditions) | (infos_TFdel_allele$cer$genotype == "WT"),],
+#                            par = counts_TFdel_allele$par[(infos_TFdel_allele$par$condition %in% goodConditions) | (infos_TFdel_allele$par$genotype == "WT"),])
+# 
+# redhuis_info_allele <- list(cer = infos_TFdel_allele$cer[(infos_TFdel_allele$cer$condition %in% goodConditions) | (infos_TFdel_allele$cer$genotype == "WT"),],
+#                             par = infos_TFdel_allele$par[(infos_TFdel_allele$par$condition %in% goodConditions) | (infos_TFdel_allele$par$genotype == "WT"),])
+# 
+# rm(sample_info, sample_info_allele, counts, counts_allele,
+#    counts_cer, counts_par, counts_hyc, counts_hyp)
+# 
+# # repeat for Barkai
+# load(file = "data_files/Cleaned_Barkai_Data.RData")
+# load(file = "data_files/Cleaned_Barkai_Data_AlleleSpecific.RData")
+# 
+# #### Condition-matched counts/info for parents and hybrids ####
+# 
+# ### condition-matching samples so that expression similarity can be calculated
+# counts_cer <- counts[, sample_info$organism == "cer"] |> t()
+# info_cer <- sample_info %>% filter(sample_name %in% rownames(counts_cer))
+# counts_par <- counts[, sample_info$organism == "par"] |> t()
+# info_par <- sample_info %>% filter(sample_name %in% rownames(counts_par))
+# counts_hyc <- counts_allele[, sample_info_allele$organism == "hyb" & sample_info_allele$allele == "cer"] |> t()
+# info_hyc <- sample_info_allele %>% filter(sample_name %in% rownames(counts_hyc))
+# counts_hyp <- counts_allele[, sample_info_allele$organism == "hyb" & sample_info_allele$allele == "par"] |> t()
+# info_hyp <- sample_info_allele %>% filter(sample_name %in% rownames(counts_hyp))
+# 
+# # Filtering out conditions (combinations of genotype, experiment, and timepoint) that are not represented in cer, par, and hyb
+# common_conditions <- bind_rows(info_cer, info_par, info_hyc, info_hyp) %>% 
+#   select(condition, allele, organism) |> unique() %>% 
+#   pivot_wider(id_cols = c("condition"), names_from = c("allele", "organism"), values_from = "organism") %>% 
+#   drop_na() %>% 
+#   select(condition) |> pull()
+# 
+# # filtering down to common conditions
+# info_cer <- filter(info_cer, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
+# info_par <- filter(info_par, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
+# info_hyc <- filter(info_hyc, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
+# info_hyp <- filter(info_hyp, condition %in% common_conditions) %>% arrange(experiment, condition, well_flask_ID)
+# 
+# # checking conditions are the same (these should both be 1)
+# sum(unique(info_cer$condition) == unique(info_par$condition))/length(unique(info_cer$condition))
+# sum(unique(info_hyc$condition) == unique(info_hyp$condition))/length(unique(info_hyc$condition))
+# 
+# # paring down counts to match condition-matched info dfs
+# counts_cer <- counts_cer[info_cer$sample_name,] # remember genes are COLUMNS in WGCNA
+# counts_par <- counts_par[info_par$sample_name,]
+# counts_hyc <- counts_hyc[info_hyc$sample_name,]
+# counts_hyp <- counts_hyp[info_hyp$sample_name,]
+# 
+# # splitting off TFdel dataset b/c replicates are useful for glm to tell how much unexplained variation there is
+# infos_TFdel <- list(cer = info_cer[info_cer$experiment == "LowN",],
+#                     par = info_par[info_par$experiment == "LowN",]) 
+# counts_TFdel <- list(cer = counts_cer[info_cer$experiment == "LowN",], 
+#                      par = counts_par[info_par$experiment == "LowN",])
+# infos_TFdel_allele <- list(cer = info_hyc[info_hyc$experiment == "LowN",],
+#                            par = info_hyp[info_hyp$experiment == "LowN",]) 
+# counts_TFdel_allele <- list(cer = counts_hyc[info_hyc$experiment == "LowN",], 
+#                             par = counts_hyp[info_hyp$experiment == "LowN",])
+# 
+# # TF filtering: TF must have all at least 2 replicates 
+# # filtering (goodConditions determined in Redhuis, and we verified that barkai included additional TFs without omitting any)
+# barkai_cts <- list(cer = counts_TFdel$cer[(infos_TFdel$cer$condition %in% goodConditions) | (infos_TFdel$cer$genotype == "WT"),],
+#                    par = counts_TFdel$par[(infos_TFdel$par$condition %in% goodConditions) | (infos_TFdel$par$genotype == "WT"),])
+# 
+# barkai_info <- list(cer = infos_TFdel$cer[(infos_TFdel$cer$condition %in% goodConditions) | (infos_TFdel$cer$genotype == "WT"),],
+#                     par = infos_TFdel$par[(infos_TFdel$par$condition %in% goodConditions) | (infos_TFdel$par$genotype == "WT"),])
+# 
+# barkai_cts_allele <- list(cer = counts_TFdel_allele$cer[(infos_TFdel_allele$cer$condition %in% goodConditions) | (infos_TFdel_allele$cer$genotype == "WT"),],
+#                           par = counts_TFdel_allele$par[(infos_TFdel_allele$par$condition %in% goodConditions) | (infos_TFdel_allele$par$genotype == "WT"),])
+# 
+# barkai_info_allele <- list(cer = infos_TFdel_allele$cer[(infos_TFdel_allele$cer$condition %in% goodConditions) | (infos_TFdel_allele$cer$genotype == "WT"),],
+#                            par = infos_TFdel_allele$par[(infos_TFdel_allele$par$condition %in% goodConditions) | (infos_TFdel_allele$par$genotype == "WT"),])
+# 
+# rm(list = setdiff(ls(), c("redhuis_cts", "redhuis_cts_allele","redhuis_info", "redhuis_info_allele",
+#                           "barkai_cts", "barkai_cts_allele","barkai_info", "barkai_info_allele",
+#                           "coef_thresh", "p_thresh")))
