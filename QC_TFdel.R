@@ -602,13 +602,16 @@ pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/TFdel_SMD_h
 p
 dev.off()
 
+# TODO: DESeq2 seems to have many more significant negative
+# log2 fold change effects than positive ones, 
+# Is this also true for SMD of a large enough magnitude?
+
 # saving
 save(TFdeldfs_pois,
      TFdeldfs_negbin,
      SMDs, SMDdf, poisdf, 
      qcdf, file = "data_files/QC_TFdel.RData")
 load(file = "data_files/QC_TFdel.RData")
-
 
 #### effect size distributions by TF ####
 # do any TFs have more nsig than others within each dataset?
