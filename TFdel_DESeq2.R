@@ -1,5 +1,5 @@
 sapply(c("tidyr", "dplyr", "purrr", "ggplot2", "ggpubr", "DESeq2"), require, character.only=TRUE)
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2024/")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025/")
 load("data_files/Cleaned_TFdel_Unnormalized_Counts.RData")
 load("data_files/FinalDataframe3Disp.RData")
 eff_thresh <- 1
@@ -200,9 +200,108 @@ length(unique(TFdeldf$deletion)) # we shouldn't lose any TFs entirely
 sum(TFdeldf$padj < p_thresh)
 sum(TFdeldf$padj >= p_thresh) # should have way fewer significant effects
 
-#### Saving ####
-save(TFdeldf, file = "data_files/TFdel_DESeq2.RData")
+#### Negative control: WT samples 28 vs 2 replicates, "leave one out" as sham TFdels ####
+set.seed(23)
 
+# looping through counts, change counts for each TFdel to be 2 randomly sampled WT samples (or however many replicates that TF has)
+counts_sham1 <- map2(counts, infos, \(x, y) {
+  for (del in setdiff(unique(y$genotype), "WT")) {
+    samps <- filter(y, genotype == del) |> select(sample_name) |> pull()
+    wt_samps <- filter(y, genotype == "WT") |> select(sample_name) |> pull()
+    x[, samps] <- x[, sample(wt_samps, length(samps), replace = FALSE)] # because we loop through this sampling for every deletion it is effectively sampling with replacement. We just want to make sure the same sample isn't used twice for the same genotype, as variation for every gene would be 0
+  }
+  return(x)
+})
+
+set.seed(42)
+
+# same thing twice, just randomizing which WT samples go to which TF
+counts_sham2 <- map2(counts, infos, \(x, y) {
+  for (del in setdiff(unique(y$genotype), "WT")) {
+    samps <- filter(y, genotype == del) |> select(sample_name) |> pull()
+    wt_samps <- filter(y, genotype == "WT") |> select(sample_name) |> pull()
+    x[, samps] <- x[, sample(wt_samps, length(samps), replace = FALSE)] # because we loop through this sampling for every deletion it is effectively sampling with replacement. We just want to make sure the same sample isn't used twice for the same genotype, as variation for every gene would be 0
+  }
+  return(x)
+})
+
+# pairing counts and sample info
+dds_sham1 <- map2(counts_sham1, infos, \(x, y) {
+  output <- DESeqDataSetFromMatrix(countData = x,
+                                   colData = y,
+                                   design = ~ genotype)
+  return(output)
+})
+
+dds_sham2 <- map2(counts_sham2, infos, \(x, y) {
+  output <- DESeqDataSetFromMatrix(countData = x,
+                                   colData = y,
+                                   design = ~ genotype)
+  return(output)
+})
+
+### Model fitting
+library("BiocParallel")
+register(MulticoreParam(4))
+dds_sham1 <- map(dds_sham1, DESeq, parallel = TRUE)
+dds_sham2 <- map(dds_sham2, DESeq, parallel = TRUE)
+
+# checking control: TDH3 decreases in GCR2delete
+# TP1
+test <- results(dds_sham1$cerTP1, contrast = c("genotype", "GCR2delete", "WT"),
+                alpha = 0.05)
+test["YGR192C",] # shouldn't be DE anymore, WT vs WT
+
+### Formatting data
+# extracting LFCs, SEs, and pvalues from each TFdel-WT comparison in each 
+# species and output as TFdeldfs
+TFdeldf_sham1 <- map(c(1:nrow(griddf)), \(i) {
+  del <- griddf$genotype[i] |> as.character()
+  org <- griddf$orgallele[i]
+  tp <- griddf$timepoint[i]
+  cat(i, del, org, tp, "\n")
+  res <- results(dds_sham1[[paste0(org, tp)]], contrast = c("genotype", del, "WT"),
+                 alpha = 0.05, cooksCutoff = FALSE, independentFiltering = FALSE)
+  return(tibble(gene_name = rownames(counts_TFdel$cer),
+                deletion = gsub("delete", "", del),
+                organism = org,
+                timepoint = tp,
+                basemean = res$baseMean,
+                lfc = res$log2FoldChange,
+                lfcSE = res$lfcSE,
+                pval = res$pvalue,
+                padj = res$padj))
+}) |> bind_rows()
+
+TFdeldf_sham2 <- map(c(1:nrow(griddf)), \(i) {
+  del <- griddf$genotype[i] |> as.character()
+  org <- griddf$orgallele[i]
+  tp <- griddf$timepoint[i]
+  cat(i, del, org, tp, "\n")
+  res <- results(dds_sham2[[paste0(org, tp)]], contrast = c("genotype", del, "WT"),
+                 alpha = 0.05, cooksCutoff = FALSE, independentFiltering = FALSE)
+  return(tibble(gene_name = rownames(counts_TFdel$cer),
+                deletion = gsub("delete", "", del),
+                organism = org,
+                timepoint = tp,
+                basemean = res$baseMean,
+                lfc = res$log2FoldChange,
+                lfcSE = res$lfcSE,
+                pval = res$pvalue,
+                padj = res$padj))
+}) |> bind_rows()
+
+# A few gene/TF/tp combos didn't converge in DESeq2 or were missing replicates:
+TFdeldf_sham1 <- drop_na(TFdeldf_sham1)
+TFdeldf_sham2 <- drop_na(TFdeldf_sham2)
+
+sum(TFdeldf_sham1$padj < p_thresh)
+sum(TFdeldf_sham1$padj >= p_thresh) # should have way fewer significant effects
+sum(TFdeldf_sham2$padj < p_thresh)
+sum(TFdeldf_sham2$padj >= p_thresh)
+
+#### Saving ####
+save(TFdeldf, TFdeldf_sham1, TFdeldf_sham2, file = "data_files/TFdel_DESeq2.RData")
 
 ############## Probably Archive - Data Exploration moved to Fig script ########################## 
 
