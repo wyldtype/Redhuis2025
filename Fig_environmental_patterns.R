@@ -1,9 +1,10 @@
-sapply(c("dplyr", "tidyr", "purrr", "WGCNA", "stringr", "ggplot2", "RColorBrewer", "ggpubr", "grid", "ComplexHeatmap", "circlize"), require, character.only=TRUE)
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2024/")
+sapply(c("dplyr", "tidyr", "purrr", "WGCNA", "stringr", "ggplot2", "RColorBrewer", "ggpubr", "grid", "ComplexHeatmap", "circlize", "huxtable"), require, character.only=TRUE)
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025/")
 source("functions_for_figure_scripts.R")
-load("data_files/old_data_files/FinalDataframe3Disp.RData")
-load("data_files/old_data_files/Cleaned_Counts.RData")
-load("data_files/old_data_files/Cleaned_Counts_Allele.RData")
+load("data_files/FinalDataframe3Disp.RData")
+load("data_files/Cleaned_Counts.RData")
+load("data_files/Cleaned_Counts_Allele.RData")
+load(file = "data_files/GO_Slim.RData")
 
 ExperimentNames <- c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold")
 LongExperimentNames <- c("Saturated Growth", "Cell Cycle", "Low Nitrogen", "Low Phosphate", "Heat Stress", "Cold Stress")
@@ -13,15 +14,32 @@ LongExperimentNames <- c("Saturated Growth", "Cell Cycle", "Low Nitrogen", "Low 
 # patterns is to categorize every gene into one group (conserved, cis/level divergent,
 # trans/dynamics divergent, or other) and show how "other" doesn't encompass many genes
 
-#### Barplots of cons,lev,dyn,levdyn in each Environment ####
-# TODO: some simple quantification extending to non-Saturated
-# growth environments showing
-# A) number of genes in each divergence category is roughly the 
-# same for each environment (most conserved, many dyn, fewer lev, even fewer levdyn)
-# B) levdyn isn't an enriched or unenriched category, just the standard venn diagram null expected overlap
-# pair these barplots with the cluster reference in the next section
-# as a figure after the Saturated Growth figure to 
-# summarize divergence categories in other experiments
+#### Table of cluster counts separately for each species ####
+ht <- finaldf |> select(cer, par, experiment) |> 
+  pivot_longer(cols = c("cer", "par"),
+               names_to = "organism", values_to = "cluster") |> 
+  mutate(experiment = factor(experiment, levels = c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold"))) |> 
+  arrange(experiment, cluster, organism) |> 
+  group_by(experiment, cluster, organism) |> 
+  summarise(n = n()) |> 
+  mutate(title = paste0(experiment, cluster)) |> 
+  select(title, organism, n) |> 
+  pivot_wider(id_cols = "title", 
+              names_from = "organism",
+              values_from = "n") |> 
+    hux(add_colnames = FALSE) |> 
+  t() |> 
+  theme_article()
+
+# bold(ht)[1,]           <- TRUE
+# bottom_border(ht)[1,]  <- 0.4
+# align(ht)[,2]          <- "right"
+# right_padding(ht)      <- 10
+# left_padding(ht)       <- 10
+# width(ht)              <- 1
+# number_format(ht)      <- 0
+
+quick_html(ht, file = "../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/cluster_table.html")
 
 #### Visualize cluster expression patterns in each experiment ####
 display.brewer.all()
@@ -34,8 +52,7 @@ palettedf <- tibble(experiment = c("CC", "HAP4", "LowN", "LowPi", "Cold", "Heat"
 
 plotClusterPatternByExperiment <- function(.df, .experiment, .title = NULL) {
   plotdf <- summarise(group_by(.df, time_point_num, label),
-                      mean_expr = mean(expr, na.rm = TRUE)) |>
-    drop_na() # Heat/Cold have some genes with NA labels b/c they're not in the Fay dataset
+                      mean_expr = mean(expr, na.rm = TRUE))
   plotdf$label <- as.factor(plotdf$label)
   color_plt <- palettedf |> filter(experiment == .experiment) |> select(palette) |> pull()
   if (is.null(.title)) {
@@ -49,376 +66,36 @@ plotClusterPatternByExperiment <- function(.df, .experiment, .title = NULL) {
     scale_color_brewer(palette = color_plt, name = "cluster",
                        direction = -1) +
     theme_classic() +
-    theme(legend.position = "none") +
+    theme(legend.position = "right") +
     ggtitle(.title)
 }
 pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/cluster_ref.pdf",
-    width = 15, height = 3)
+    width = 15, height = 2)
 ggarrange(plotClusterPatternByExperiment(clusterdf_list$HAP4_2$df, .experiment = "HAP4"),
           plotClusterPatternByExperiment(clusterdf_list$CC_2$df, .experiment = "CC"),
           plotClusterPatternByExperiment(clusterdf_list$LowN_2$df, .experiment = "LowN"),
           plotClusterPatternByExperiment(clusterdf_list$LowPi_2$df, .experiment = "LowPi"),
-          plotClusterPatternByExperiment(clusterdf_list$Heat_2$df, .experiment = "Heat"),
-          plotClusterPatternByExperiment(clusterdf_list$Cold_2$df, .experiment = "Cold"),
-          nrow = 1, ncol = 6, common.legend = TRUE)
+          plotClusterPatternByExperiment(clusterdf_list$Heat_4$df, .experiment = "Heat"),
+          plotClusterPatternByExperiment(clusterdf_list$Cold_3$df, .experiment = "Cold"),
+          nrow = 1, ncol = 6, common.legend = FALSE)
 dev.off()
 
 # most common Scer shape
-plotdf <- expand_grid(experiment = unique(clusterdf$experiment),
-            gene_ID = unique(clusterdf$gene_ID)) |>
-  left_join(y = clusterdf, by = c("gene_ID","experiment")) |>
+plotdf <- expand_grid(experiment = unique(finaldf$experiment),
+            gene_name = unique(finaldf$gene_name)) |>
+  left_join(y = finaldf, by = c("gene_name","experiment")) |>
   arrange(experiment) |>
   mutate(cer_clust = paste0(experiment, cer),
          par_clust = paste0(experiment, par)) |>
   ungroup() |>
-  group_by(gene_ID) |>
+  group_by(gene_name) |>
   summarise(code_cer = reduce(cer_clust, .f = paste, sep = "_"),
             code_par = reduce(par_clust, .f = paste, sep = "_"))
 sort(table(plotdf$code_cer), decreasing = TRUE)[1:30]
-
-#### Level divergence is consistent across environments ####
-# example level-diverging gene groups across all environments
-# Saturated Growth increasing cluster, up in Scer
-gene_idxs <- finaldf |> filter(experiment == "HAP4" & group == "levupcer1") |> 
-  select(gene_name) |> pull()
-plotExpressionProfileQuartet(.cts1 = collapsed$cer[gene_idxs, info$experiment %in% ExperimentNames],
-                             .cts2 = collapsed$par[gene_idxs, info$experiment %in% ExperimentNames],
-                             .cts3 = collapsed_allele$cer[gene_idxs, info_allele$experiment %in% ExperimentNames],
-                             .cts4 = collapsed_allele$par[gene_idxs, info_allele$experiment %in% ExperimentNames],
-                             .info1 = info[info$experiment %in% ExperimentNames,],
-                             .info2 = info[info$experiment %in% ExperimentNames,],
-                             .info3 = info_allele[info_allele$experiment %in% ExperimentNames,],
-                             .info4 = info_allele[info_allele$experiment %in% ExperimentNames,],
-                             .method = "line",
-                             .show_points = FALSE,
-                             .show_confidence_intervals = TRUE,
-                             .normalization = "log2",
-                             .plotlims = c(4, 9),
-                             .plot_titles = TRUE)
-# less obvious change in Heat/Cold dataset
-# This is partly real biological difference---the Heat/Cold strains are
-# T73 (Scer wine strain) and N17, whereas the rest are S288c and CBS432,
-# but it's also due to these datasets having lower log2 fold changes
-# between species over all (because the data is standard, stranded RNAseq
-# instead of 3' tag-seq)
-
-### What percent of level divergers are also diverging in other environments?
-# Heat map ordering genes by lfc in one environment per row (cols are genes)
-# Probably filter down to genes that are DE in at least one experiment
-levmatdf <- finaldf |> filter(experiment %in% ExperimentNames) |> 
-  mutate(effect_size_species = if_else((pvalue_species > 1e-5 & abs(effect_size_species) > 1),
-                                       true = 0,
-                                       false = effect_size_species)) |> 
-  select(gene_name, experiment, effect_size_species) |> 
-  pivot_wider(id_cols = experiment, names_from = gene_name, values_from = effect_size_species)
-levmat <- as.matrix(levmatdf[,-1])
-rownames(levmat) <- levmatdf$experiment
-levmat[is.na(levmat)] <- 0
-at_least_1_idxs <- finaldf |> filter(level == "diverged") |>
-  select(gene_name) |> pull() |> unique() |> intersect(y = colnames(levmat))
-
-# plotting
-col_fun = colorRamp2(c(-2, 0, 2), c("blue2", "lightyellow", "orange1"))
-pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/lev_heatmap.pdf",
-    width = 7, height = 2.5)
-Heatmap(levmat[, at_least_1_idxs],
-        column_labels = rep("", length(at_least_1_idxs)),
-        col = col_fun)
-dev.off()
-
-# What are those groups of strongly level-divergent genes
-# that don't have the same level divergence in other environments?
-plotdf <- finaldf |> select(gene_name, experiment, effect_size_species) |> 
-  pivot_wider(id_cols = gene_name, values_from = effect_size_species,
-              names_from = experiment)
-plotdf[is.na(plotdf)] <- 0
-
-# 1) Heat/Cold unique up-Spar genes
-gene_idxs <- plotdf |> filter(Heat < -1.5 & Cold < -1.5 & LowN > -1 &
-                                CC > -1 & HAP4 > -1 & LowPi > -1) |> 
-  select(gene_name) |> pull()
-getGOSlimDf(.idxs = gene_idxs, .group_name = "heatcold_uppar",
-            .min_hits = 3) # sulfur/amino acid
-
-# 2) Heat/Cold unique up-Scer genes
-gene_idxs <- plotdf |> filter(Heat > 1 & Cold > 1 & LowN < 0.5 &
-                                CC < 0.5 & HAP4 < 0.5 & LowPi < 0.5) |> 
-  select(gene_name) |> pull()
-getGOSlimDf(.idxs = gene_idxs, .group_name = "heatcold_upcer",
-            .min_hits = 3) # mitochondrial genes? Not mt genes, but function in mitochondria
-
-# 3) LowPi unique up-Spar genes
-gene_idxs <- plotdf |> filter(Heat > -1 & Cold > -1 & LowN > -1 &
-                                CC > -1 & HAP4 > -1 & LowPi < -2) |> 
-  select(gene_name) |> pull()
-getGOSlimDf(.idxs = gene_idxs, .group_name = "lowpi_uppar",
-            .min_hits = 3) # rRNA processing
-
-# 4) up-Scer genes in everything but Heat/Cold
-gene_idxs <- plotdf |> filter(Heat < 1 & Cold < 1 & LowN > 1.5 &
-                                CC > 1.5 & HAP4 > 1.5 & LowPi > 1.5) |> 
-  select(gene_name) |> pull()
-getGOSlimDf(.idxs = gene_idxs, .group_name = "notheatcold_upcer",
-            .min_hits = 3) # cell wall?
-
-# 5) up-Spar genes in everything but Heat/Cold
-gene_idxs <- plotdf |> filter(Heat > -1 & Cold > -1 & LowN < -1.5 &
-                                CC < -1.5 & HAP4 < -1.5 & LowPi < -1.5) |> 
-  select(gene_name) |> pull()
-getGOSlimDf(.idxs = gene_idxs, .group_name = "notheatcold_uppar",
-            .min_hits = 3) # redox, extracellular?
-
-# conclusion: really not any obvious GO enrichment. Takeaways:
-# 1) level divergence is very consistent between environments for the same strains
-# 2) level divergence is 50-50 conserved-not conserved between different strains
-
-#### Level divergence is independent from dynamics ####
-# We know from Krieger et al. 2020 that divergence in level does not predict dynamics
-# divergence in dynamics and vice-versa, but it's worth illustrating how this looks
-# among genes in different dynamics categories. How it's simply a raising or lowering of the
-# same dynamic pattern
-
-# For each divergence category (cons1, cons2, dyn12, dyn21) in each experiment, 
-# highlight portions of the l2fc density plot showing how the curves stay the same
-# and the height difference between species is what is changing
-
-griddf <- expand_grid(experiment = unique(finaldf$experiment),
-                      cer = c(1, 2),
-                      par = c(1, 2))
-# plotting
-for (i in 1:nrow(griddf)) {
-  ex <- griddf$experiment[i]
-  cerclust <- griddf$cer[i]
-  parclust <- griddf$par[i]
-  plotdf <- filter(finaldf, experiment == ex & cer == cerclust & par == parclust) |> 
-    select(effect_size_species, gene_name)
-  if (nrow(plotdf) < 10) {
-    next
-  }
-  distbins <- quantile(plotdf$effect_size_species, probs = c(0, 0.2, 0.4, 0.6, 0.8, 1.0))
-  pdens <- ggplot(plotdf, aes(x = effect_size_species)) + geom_density() + theme_classic() +
-    xlab("log2 fold change") + 
-    geom_vline(xintercept = distbins)
-  plotlist <- vector(mode = "list", length = length(distbins) - 1)
-  for (i in 1:(length(distbins) - 1)) {
-    gidxs <- filter(plotdf, effect_size_species > distbins[i] & 
-                      effect_size_species <= distbins[i + 1]) |> 
-      select(gene_name) |> pull()
-    plotlist[[i]] <- plotGenes(gidxs, .plotlims = c(0, 1200), .experiment_name = ex,
-                               .normalization = "none")
-  }
-  pdf(file = paste0("../../aligning_the_molecular_phenotype/paper_figures/Supplement/level_independence/", 
-                    ex, cerclust, parclust, ".pdf"), width = 9, height = 5)
-  print(annotate_figure(ggarrange(pdens,
-            ggarrange(plotlist = plotlist, ncol = length(plotlist), nrow = 1),
-            nrow = 2), top = paste(nrow(plotdf), "genes", ex, "\nScer cluster:", cerclust, 
-                                    "Spar cluster:", parclust)))
-  dev.off()
-}
-
-#### Dynamics divergence is environment-specific ####
-### What are the most common environments for genes to diverge in dynamics together?
-finaldf |> select(gene_name, experiment, dynamics)
-
-plot_mat <- matrix(nrow = length(unique(finaldf$experiment)),
-                   ncol = length(unique(finaldf$gene_name)))
-for (e_row in unique(finaldf$experiment)) {
-  for (g_col in unique(finaldf$gene_name)) {
-    diverged_value <- finaldf |> filter(experiment == e_row & gene_name == g_col) |> 
-      select(dynamics) |> pull()
-    diverged_10 <- if_else(isTRUE(diverged_value == "diverged"),
-                           true = 1, false = 0, missing = 0)
-    cat(g_col, diverged_10, "\n")
-    plot_mat[which(unique(finaldf$experiment) == e_row),
-             which(unique(finaldf$gene_name) == g_col)] <- diverged_10
-  }
-}
-colnames(plot_mat) <- unique(finaldf$gene_name)
-rownames(plot_mat) <- unique(finaldf$experiment)
-
-# plotting
-col_fun = colorRamp2(c(0, 1), c("salmon", "aquamarine"))
-pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/env_divergence_heatmap.pdf",
-    width = 5, height = 3)
-Heatmap(plot_mat, col = col_fun,
-        row_order = unique(finaldf$experiment), column_order = unique(finaldf$gene_name),
-        row_names_side = "left", heatmap_legend_param = list(title = ""))
-dev.off()
-
-# Saturated growth 2-1
-gene_idxs <- finaldf |> filter(experiment == "HAP4" & group == "dyn21") |> 
-  select(gene_name) |> pull()
-plotExpressionProfileQuartet(.cts1 = collapsed$cer[gene_idxs,info$experiment %in% ExperimentNames],
-                             .cts2 = collapsed$par[gene_idxs,info$experiment %in% ExperimentNames],
-                             .cts3 = collapsed_allele$cer[gene_idxs,info_allele$experiment %in% ExperimentNames],
-                             .cts4 = collapsed_allele$par[gene_idxs,info_allele$experiment %in% ExperimentNames],
-                             .info1 = info[info$experiment %in% ExperimentNames,],
-                             .info2 = info[info$experiment %in% ExperimentNames,],
-                             .info3 = info_allele[info_allele$experiment %in% ExperimentNames,],
-                             .info4 = info_allele[info_allele$experiment %in% ExperimentNames,],
-                             .method = "line",
-                             .show_points = FALSE,
-                             .show_confidence_intervals = TRUE,
-                             .normalization = "centered log2",
-                             .plot_titles = TRUE)
-# What are these genes doing in other environments?
-ylims <- c(5.5, 8)
-plotGenes(gene_idxs, .experiment_name = "HAP4", .plotlims = ylims)
-# CC
-finaldf |> filter(gene_name %in% gene_idxs &
-                    experiment == "CC") |> select(group) |> table() |>
-  sort(decreasing = TRUE)
-idxs_CC1 <- filter(finaldf, gene_name %in% gene_idxs & experiment == "CC" &
-                     group == "cons1") |> select(gene_name) |> pull()
-plotGenes(idxs_CC1, .experiment_name = "CC", .plotlims = ylims)
-idxs_CC2 <- filter(finaldf, gene_name %in% gene_idxs & experiment == "CC" &
-                     group == "dyn12") |> select(gene_name) |> pull()
-plotGenes(idxs_CC2, .experiment_name = "CC", .plotlims = ylims)
-
-# LowN
-finaldf |> filter(gene_name %in% gene_idxs &
-                    experiment == "LowN") |> select(group) |> table() |>
-  sort(decreasing = TRUE)
-idxs_LowN1 <- filter(finaldf, gene_name %in% gene_idxs & experiment == "LowN" &
-                     group == "cons1") |> select(gene_name) |> pull()
-plotGenes(idxs_LowN1, .experiment_name = "LowN", .plotlims = ylims)
-idxs_LowN2 <- filter(finaldf, gene_name %in% gene_idxs & experiment == "LowN" &
-                     group == "dyn21") |> select(gene_name) |> pull()
-plotGenes(idxs_LowN2, .experiment_name = "LowN", .plotlims = ylims)
-
-# LowPi
-finaldf |> filter(gene_name %in% gene_idxs &
-                    experiment == "LowPi") |> select(group) |> table() |>
-  sort(decreasing = TRUE)
-idxs_LowPi1 <- filter(finaldf, gene_name %in% gene_idxs & experiment == "LowPi" &
-                       group == "cons1") |> select(gene_name) |> pull()
-plotGenes(idxs_LowPi1, .experiment_name = "LowPi", .plotlims = ylims)
-idxs_LowPi2 <- filter(finaldf, gene_name %in% gene_idxs & experiment == "LowPi" &
-                       group == "dyn21") |> select(gene_name) |> pull()
-plotGenes(idxs_LowPi2, .experiment_name = "LowPi", .plotlims = ylims)
-
-# Heat
-finaldf |> filter(gene_name %in% gene_idxs &
-                    experiment == "Heat") |> select(group) |> table() |>
-  sort(decreasing = TRUE)
-idxs_Heat1 <- filter(finaldf, gene_name %in% gene_idxs & experiment == "Heat" &
-                        group == "cons2") |> select(gene_name) |> pull()
-plotGenes(idxs_Heat1, .experiment_name = "Heat", .plotlims = ylims)
-idxs_Heat2 <- filter(finaldf, gene_name %in% gene_idxs & experiment == "Heat" &
-                        group == "dyn21") |> select(gene_name) |> pull()
-plotGenes(idxs_Heat2, .experiment_name = "Heat", .plotlims = ylims)
-
-
-# Cold 
-finaldf |> filter(gene_name %in% gene_idxs &
-                    experiment == "Cold") |> select(group) |> table() |>
-  sort(decreasing = TRUE)
-idxs_Cold1 <- filter(finaldf, gene_name %in% gene_idxs & experiment == "Cold" &
-                       group == "cons1") |> select(gene_name) |> pull()
-plotGenes(idxs_Cold1, .experiment_name = "Cold", .plotlims = ylims)
-idxs_Cold2 <- filter(finaldf, gene_name %in% gene_idxs & experiment == "Cold" &
-                       group == "dyn10") |> select(gene_name) |> pull()
-plotGenes(idxs_Cold2, .experiment_name = "Cold", .plotlims = ylims)
-idxs_Cold3 <- filter(finaldf, gene_name %in% gene_idxs & experiment == "Cold" &
-                       group == "dyn12") |> select(gene_name) |> pull()
-plotGenes(idxs_Cold3, .experiment_name = "Cold", .plotlims = ylims)
-idxs_Cold4 <- filter(finaldf, gene_name %in% gene_idxs & experiment == "Cold" &
-                       group == "cons2") |> select(gene_name) |> pull()
-plotGenes(idxs_Cold4, .experiment_name = "Cold", .plotlims = ylims)
-
-# LowPi 1-2
-gene_idxs <- finaldf |> filter(experiment == "LowPi" & group == "dyn12") |> 
-  select(gene_name) |> pull()
-plotExpressionProfileQuartet(.cts1 = collapsed$cer[gene_idxs,info$experiment %in% ExperimentNames],
-                             .cts2 = collapsed$par[gene_idxs,info$experiment %in% ExperimentNames],
-                             .cts3 = collapsed_allele$cer[gene_idxs,info_allele$experiment %in% ExperimentNames],
-                             .cts4 = collapsed_allele$par[gene_idxs,info_allele$experiment %in% ExperimentNames],
-                             .info1 = info[info$experiment %in% ExperimentNames,],
-                             .info2 = info[info$experiment %in% ExperimentNames,],
-                             .info3 = info_allele[info_allele$experiment %in% ExperimentNames,],
-                             .info4 = info_allele[info_allele$experiment %in% ExperimentNames,],
-                             .method = "line",
-                             .show_points = FALSE,
-                             .show_confidence_intervals = TRUE,
-                             .normalization = "log2",
-                             .plotlims = c(5.5, 8),
-                             .plot_titles = TRUE)
-
-# Heat dynamics 2-1
-finaldf |> filter(experiment == "Heat" & level == "conserved" & dynamics == "diverged") |> 
-  select(group) |> table()
-gene_idxs <- finaldf |> filter(experiment == "Heat" & group == "dyn21") |> 
-  select(gene_name) |> pull()
-plotExpressionProfilePair(.cts1 = collapsed$cer[gene_idxs,],
-                          .cts2 = collapsed$par[gene_idxs,],
-                          .info1 = info,
-                          .info2 = info,
-                          .method = "line",
-                          .show_points = FALSE,
-                          .show_confidence_intervals = TRUE,
-                          .normalization = "log2",
-                          .plotlims = c(6, 8),
-                          .plot_titles = TRUE)
-# this one is also seen in SatGrowth and LowPi in the same pattern---cer starts higher then dips lower than par over time
-finaldf |> filter(gene_name %in% gene_idxs & experiment %in% c("Heat", "Cold", "HAP4", "LowPi")) |> 
-  select(cer, par)|> table()
-
-# LowN dynamics
-finaldf |> filter(experiment == "LowN" & level == "conserved" & dynamics == "diverged") |> 
-  select(group) |> table()
-gene_idxs <- finaldf |> filter(experiment == "LowN" & group == "dyn21") |> 
-  select(gene_name) |> pull()
-plotExpressionProfilePair(.cts1 = collapsed$cer[gene_idxs,],
-                          .cts2 = collapsed$par[gene_idxs,],
-                          .info1 = info,
-                          .info2 = info,
-                          .method = "line",
-                          .show_points = FALSE,
-                          .show_confidence_intervals = TRUE,
-                          .normalization = "log2",
-                          .plotlims = c(6.5, 9),
-                          .plot_titles = TRUE)
-
-#### Expression profiles for figure ####
-# LowPi 1-2
-finaldf |> filter(experiment == "LowPi" & level == "conserved" & dynamics == "diverged") |> 
-  select(group) |> table()
-gene_idxs <- finaldf |> filter(experiment == "LowPi" &
-                                 cer == 1 & par == 2) |> 
-  select(gene_name) |> pull()
-pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/LowPi12.pdf",
-    width = 13, height = 2)
-plotExpressionProfilePair(.cts1 = collapsed$cer[gene_idxs,],
-                          .cts2 = collapsed$par[gene_idxs,],
-                          .info1 = info,
-                          .info2 = info,
-                          .method = "line",
-                          .show_points = FALSE,
-                          .show_confidence_intervals = TRUE,
-                          .normalization = "centered log2",
-                          .plot_titles = TRUE)
-dev.off()
-
-# Heat 2-1
-finaldf |> filter(experiment == "Heat" & dynamics == "diverged") |> 
-  select(group) |> table()
-gene_idxs <- finaldf |> filter(experiment == "Heat" &
-                                 cer == 2 & par ==1) |> 
-  select(gene_name) |> pull()
-pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/Heat21.pdf",
-    width = 13, height = 2)
-plotExpressionProfilePair(.cts1 = collapsed$cer[gene_idxs,],
-                          .cts2 = collapsed$par[gene_idxs,],
-                          .info1 = info,
-                          .info2 = info,
-                          .method = "line",
-                          .show_points = FALSE,
-                          .show_confidence_intervals = TRUE,
-                          .normalization = "centered log2",
-                          .plot_titles = TRUE)
-dev.off()
+sort(table(plotdf$code_par), decreasing = TRUE)[1:30]
 
 #### Heatmap-type quantification of dynamics divergence in each environment #### 
+
 # Y axis: environment those 2-1 or 1-2 divergers were ID'd in
 # X axis: how their dynamics divergence looks in other environments
 
@@ -454,7 +131,7 @@ plot_mat <- matrix(nrow = length(ExperimentNames),
 for (e_row in ExperimentNames) {
   for (e_col in ExperimentNames) {
     e_gene_idxs <- finaldf |> filter(experiment == e_row &
-                                     cer == 2 & par == 1) |> 
+                                       cer == 2 & par == 1) |> 
       select(gene_name) |> pull()
     e_cor <- getDynamicsCorr(e_gene_idxs, .experiment_name = e_col)
     plot_mat[which(ExperimentNames == e_row),
@@ -504,59 +181,80 @@ Heatmap(plot_mat, col = col_fun,
         })
 dev.off()
 
-### Both 2-1 and 1-2 combined for presentation
-getDynamicsCorrBoth <- function(.gene_idxs12, .gene_idxs21,
-                                .experiment_name) {
+### All dynamics divergers
+getDynamicsCorrAllClusters <- function(.gene_idxs, .experiment_name) {
   condition_vec <- info |> filter(experiment == .experiment_name) |> 
     select(condition) |> pull()
-  cer_vec12 <- collapsed$cer[.gene_idxs12, condition_vec] |> 
-    colMeans(na.rm = TRUE)
-  cer_vec21 <- collapsed$cer[.gene_idxs21, condition_vec] |> 
-    colMeans(na.rm = TRUE)
-  par_vec12 <- collapsed$par[.gene_idxs12, condition_vec] |> 
-    colMeans(na.rm = TRUE)
-  par_vec21 <- collapsed$par[.gene_idxs21, condition_vec] |> 
-    colMeans(na.rm = TRUE)
-  cor12 <- cor(cer_vec12, par_vec12)
-  cor21 <- cor(cer_vec21, par_vec21)
-  return(mean(c(cor12, cor21)))
+  
+  clust_pairs <- finaldf |> filter(gene_name %in% .gene_idxs &
+                                     experiment == .experiment_name) |> 
+    group_by(cer, par) |> summarise(n = n()) |> ungroup()
+  cors <- map2(clust_pairs$cer, clust_pairs$par, \(x, y) {
+    clust_idxs <- finaldf |> filter(gene_name %in% .gene_idxs &
+                                      experiment == .experiment_name &
+                                      cer == x & par == y) |> 
+      select(gene_name) |> pull()
+    cer_vec <- collapsed$cer[clust_idxs, condition_vec, drop = FALSE] |> 
+      colMeans(na.rm = TRUE)
+    par_vec <- collapsed$par[clust_idxs, condition_vec, drop = FALSE] |> 
+      colMeans(na.rm = TRUE)
+    return(cor(cer_vec, par_vec))
+  }) |> unlist()
+  return(as.numeric(sum(cors*clust_pairs$n)/sum(clust_pairs$n))) # weighted average
 }
 
 # tests for getDynamicsCorrBoth
-# individual cors:
-gene_idxs12 <- finaldf |> filter(experiment == "Heat" &
+# LowPi 1-2 alone:
+gene_idxs <- finaldf |> filter(experiment == "LowPi" &
+                                 dynamics == "diverged" &
                                  cer == 1 & par == 2) |> 
   select(gene_name) |> pull()
-testcor12 <- getDynamicsCorr(gene_idxs12, .experiment_name = "Heat")
-gene_idxs21 <- finaldf |> filter(experiment == "Heat" &
+testcor12 <- getDynamicsCorrAllClusters(gene_idxs, .experiment_name = "LowPi")
+testcor12
+getDynamicsCorr(gene_idxs, .experiment_name = "LowPi") # should be same number
+# LowPi 2-1 alone:
+gene_idxs <- finaldf |> filter(experiment == "LowPi" &
+                                 dynamics == "diverged" &
                                  cer == 2 & par == 1) |> 
   select(gene_name) |> pull()
-testcor21 <- getDynamicsCorr(gene_idxs21, .experiment_name = "Heat")
-# Heat 1-2 alone:
-testcor12
-# Heat 2-1 alone:
+testcor21 <- getDynamicsCorrAllClusters(gene_idxs, .experiment_name = "LowPi")
 testcor21
+getDynamicsCorr(gene_idxs, .experiment_name = "LowPi") # should be same number
+# weights
+finaldf |> filter(experiment == "LowPi" &
+                    dynamics == "diverged" &
+                    cer != 0 & par != 0) |> 
+  select(cer, par) |> table()
 # what both should be:
-mean(c(testcor12, testcor21))
+sum(testcor12*372, testcor21*795)/(372 + 795) # with weighted average
+mean(c(testcor12, testcor21)) # without weighted average
 # Both 1-2 and 2-1:
-getDynamicsCorrBoth(.gene_idxs12 = gene_idxs12, 
-                    .gene_idxs21 = gene_idxs21, 
-                    .experiment_name = "Heat")
+gene_idxs <- finaldf |> filter(experiment == "LowPi" &
+                                 dynamics == "diverged" &
+                                 cer != 0 & par != 0) |> 
+  select(gene_name) |> pull()
+getDynamicsCorrAllClusters(gene_idxs, .experiment_name = "LowPi") # should be same as manual calculation
+# test2: HAP4/CC failed until we added drop = FALSE
+gene_idxs <- finaldf |> filter(experiment == "HAP4" &
+                                 dynamics == "diverged" &
+                                 cer != 0 & par != 0) |> 
+  select(gene_name) |> pull()
+finaldf |> filter(experiment == "CC" & gene_name %in% gene_idxs) |> 
+  select(cer, par) |> table() # b/c there's only one 1-0 gene
+getDynamicsCorrAllClusters(gene_idxs, .experiment_name = "CC")
 
 # plotting
 plot_mat <- matrix(nrow = length(ExperimentNames),
                    ncol = length(ExperimentNames))
 for (e_row in ExperimentNames) {
   for (e_col in ExperimentNames) {
-    e_gene_idxs12 <- finaldf |> filter(experiment == e_row &
-                                         cer == 1 & par == 2) |> 
+    cat(e_row, e_col, "\n")
+    e_gene_idxs <- finaldf |> filter(experiment == e_row &
+                                         cer != 0 & par != 0 &
+                                       dynamics == "diverged") |> 
       select(gene_name) |> pull()
-    e_gene_idxs21 <- finaldf |> filter(experiment == e_row &
-                                         cer == 2 & par == 1) |> 
-      select(gene_name) |> pull()
-    e_cor <- getDynamicsCorrBoth(.gene_idxs12 = e_gene_idxs12,
-                                 .gene_idxs21 = e_gene_idxs21,
-                                 .experiment_name = e_col)
+    e_cor <- getDynamicsCorrAllClusters(.gene_idxs = e_gene_idxs,
+                                        .experiment_name = e_col)
     plot_mat[which(ExperimentNames == e_row),
              which(ExperimentNames == e_col)] <- e_cor
   }
@@ -565,17 +263,79 @@ colnames(plot_mat) <- LongExperimentNames
 rownames(plot_mat) <- LongExperimentNames
 
 # plotting
-col_fun = colorRamp2(c(-1, 0, 1), c("red2", "white", "skyblue"))
-pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/heatmap_1221avg.pdf",
+col_fun = colorRamp2(c(-1, 0, 1), c("red", "white", "skyblue"))
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/heatmap_dynamics_all_clusters.pdf",
     width = 5, height = 4)
 Heatmap(plot_mat, col = col_fun,
         row_order = LongExperimentNames, column_order = LongExperimentNames,
-        row_names_side = "left", heatmap_legend_param = list(title = ""))
+        row_names_side = "left", heatmap_legend_param = list(title = ""),
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          grid.text(sprintf("%.2f", plot_mat[i, j]), x, y, gp = gpar(fontsize = 10))
+        })
 dev.off()
 
+### Supplementary figure: Diagonal is still the most uncorrelated when taking average cor of each ortholog pair
+# (as opposed to one cor of average expr of all divergent genes)
+# But now the correlations are much weaker magnitude b/c most single genes are weakly correlated moving the average towards 0
+getDynamicsCorrPerGene <- function(.gene_idxs, .experiment_name) {
+  # filter for genes expressed high enough in this environment
+  good_expr_genes <- finaldf |> filter(experiment == .experiment_name) |> 
+    select(gene_name) |> pull()
+  .gene_idxs <- .gene_idxs[.gene_idxs %in% good_expr_genes]
+  # calculating correlation of each gene btwn parental orthologs
+  condition_vec <- info |> filter(experiment == .experiment_name) |> 
+    select(condition) |> pull()
+  cer_mat <- collapsed$cer[.gene_idxs, condition_vec]
+  par_mat <- collapsed$par[.gene_idxs, condition_vec]
+  cor_vec <- map(.gene_idxs, \(g) {
+    return(cor(cer_mat[g,], par_mat[g,]))
+  }) |> unlist()
+  return(mean(cor_vec, na.rm = TRUE)) # NAs can arise from one species' counts being all 0s
+}
+# tests for getDynamicsCorrPerGene
+# HAP4 all diverged dynamics
+gene_idxs <- finaldf |> filter(experiment == "HAP4" &
+                                 dynamics == "diverged" & 
+                                 cer != 0 & par != 0) |> 
+  select(gene_name) |> pull()
+getDynamicsCorrPerGene(gene_idxs, .experiment_name = "HAP4")
+getDynamicsCorrPerGene(gene_idxs, .experiment_name = "LowN")
+getDynamicsCorrPerGene(gene_idxs, .experiment_name = "LowPi")
+getDynamicsCorrPerGene(gene_idxs, .experiment_name = "CC")
+getDynamicsCorrPerGene(gene_idxs, .experiment_name = "Heat")
+getDynamicsCorrPerGene(gene_idxs, .experiment_name = "Cold")
+
+# all dynamics divergers
+plot_mat <- matrix(nrow = length(ExperimentNames),
+                   ncol = length(ExperimentNames))
+for (e_row in ExperimentNames) {
+  for (e_col in ExperimentNames) {
+    e_gene_idxs <- finaldf |> filter(experiment == e_row &
+                                       dynamics == "diverged" & 
+                                       cer != 0 & par != 0) |> 
+      select(gene_name) |> pull()
+    e_cor <- getDynamicsCorrPerGene(e_gene_idxs, .experiment_name = e_col)
+    plot_mat[which(ExperimentNames == e_row),
+             which(ExperimentNames == e_col)] <- e_cor
+  }
+}
+colnames(plot_mat) <- LongExperimentNames
+rownames(plot_mat) <- LongExperimentNames
+
+# plotting
+col_fun = colorRamp2(c(0, 0.25, 0.5), c("red2", "white", "skyblue"))
+pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/dynamics_divergence_heatmap_per_gene.pdf",
+    width = 5, height = 3)
+Heatmap(plot_mat, col = col_fun,
+        row_order = LongExperimentNames, column_order = LongExperimentNames,
+        row_names_side = "left", heatmap_legend_param = list(title = ""),
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          grid.text(sprintf("%.2f", plot_mat[i, j]), x, y, gp = gpar(fontsize = 10))
+        })
+dev.off()
 
 #### Supplemental figure: 6x6 plots of all expression divergence ####
-# instead of the heatmap, simply have a 6x6 grid of 
+# instead or in addition to the heatmap, have a 6x6 grid of 
 # expression profiles from
 # each divergence group in all 6 environments
 plotlist21 <- vector(mode = "list", length = length(ExperimentNames))
@@ -616,6 +376,552 @@ pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/all_env_pat
     width = 13, height = 10)
 ggarrange(plotlist = plotlist12, nrow = 6, ncol = 1)
 dev.off()
+
+#### Heatmaps of level divergers, Upcer Uppar separated ####
+plot_mat <- matrix(nrow = length(ExperimentNames),
+                   ncol = length(ExperimentNames))
+# up in Scer
+for (e_row in ExperimentNames) {
+  for (e_col in ExperimentNames) {
+    e_gene_idxs <- finaldf |> filter(experiment == e_row &
+                                       level == "diverged" &
+                                       sign(effect_size_species) == 1) |> 
+      select(gene_name) |> pull()
+    avg_lfc <- finaldf |> filter(experiment == e_col & 
+                                   gene_name %in% e_gene_idxs) |> 
+      select(effect_size_species) |> pull() |> mean()
+    plot_mat[which(ExperimentNames == e_row),
+             which(ExperimentNames == e_col)] <- avg_lfc
+  }
+}
+colnames(plot_mat) <- LongExperimentNames
+rownames(plot_mat) <- LongExperimentNames
+
+col_fun = colorRamp2(c(-1, 0, 1), c("blue2", "white", "orange1"))
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/level_divergence_heatmap_up_scer.pdf",
+    width = 5, height = 3)
+Heatmap(plot_mat, col = col_fun,
+        row_order = LongExperimentNames, column_order = LongExperimentNames,
+        row_names_side = "left", heatmap_legend_param = list(title = ""),
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          grid.text(sprintf("%.2f", plot_mat[i, j]), x, y, gp = gpar(fontsize = 10))
+        })
+dev.off()
+# up in Spar
+plot_mat <- matrix(nrow = length(ExperimentNames),
+                   ncol = length(ExperimentNames))
+for (e_row in ExperimentNames) {
+  for (e_col in ExperimentNames) {
+    e_gene_idxs <- finaldf |> filter(experiment == e_row &
+                                       level == "diverged" & 
+                                       sign(effect_size_species) == -1) |> 
+      select(gene_name) |> pull()
+    avg_lfc <- finaldf |> filter(experiment == e_col & 
+                                   gene_name %in% e_gene_idxs) |> 
+      select(effect_size_species) |> pull() |> mean()
+    plot_mat[which(ExperimentNames == e_row),
+             which(ExperimentNames == e_col)] <- avg_lfc
+  }
+}
+colnames(plot_mat) <- LongExperimentNames
+rownames(plot_mat) <- LongExperimentNames
+
+col_fun = colorRamp2(c(-1, 0, 1), c("blue2", "white", "orange1"))
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/level_divergence_heatmap_up_spar.pdf",
+    width = 5, height = 3)
+Heatmap(plot_mat, col = col_fun,
+        row_order = LongExperimentNames, column_order = LongExperimentNames,
+        row_names_side = "left", heatmap_legend_param = list(title = ""),
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          grid.text(sprintf("%.2f", plot_mat[i, j]), x, y, gp = gpar(fontsize = 10))
+        })
+dev.off()
+
+#### Probably Archive: Heatmaps of pct dynamics and level divergers ####
+# probably archive b/c
+# Pros: intuitive --- "what percent of level or dynamics divergers in one environment are also diverging in the other environment?"
+# Cons: diagonal guaranteed to be 1.0 (highest possible value)
+
+# dynamics divergence
+getPercentDynamicsDiv <- function(.gene_idxs, .experiment_name) {
+  ndiv <- finaldf |> filter(gene_name %in% .gene_idxs &
+                              experiment == .experiment_name &
+                              dynamics == "diverged") |> 
+    nrow()
+  return(ndiv/length(.gene_idxs))
+}
+# plotting
+plot_mat <- matrix(nrow = length(ExperimentNames),
+                   ncol = length(ExperimentNames))
+for (e_row in ExperimentNames) {
+  for (e_col in ExperimentNames) {
+    cat(e_row, e_col, "\n")
+    e_gene_idxs <- finaldf |> filter(experiment == e_row &
+                                       dynamics == "diverged") |> 
+      select(gene_name) |> pull()
+    e_mean <- getPercentDynamicsDiv(.gene_idxs = e_gene_idxs,
+                                    .experiment_name = e_col)
+    plot_mat[which(ExperimentNames == e_row),
+             which(ExperimentNames == e_col)] <- e_mean
+  }
+}
+colnames(plot_mat) <- LongExperimentNames
+rownames(plot_mat) <- LongExperimentNames
+
+# plotting
+col_fun = colorRamp2(c(0, 1), c("white", "red2"))
+Heatmap(plot_mat, col = col_fun,
+        row_order = LongExperimentNames, column_order = LongExperimentNames,
+        row_names_side = "left", heatmap_legend_param = list(title = ""))
+
+# level divergence
+getPercentLevelDiv <- function(.gene_idxs, .experiment_name) {
+  ndiv <- finaldf |> filter(gene_name %in% .gene_idxs &
+                              experiment == .experiment_name &
+                              level == "diverged") |> 
+    nrow()
+  return(ndiv/length(.gene_idxs))
+}
+# plotting
+plot_mat <- matrix(nrow = length(ExperimentNames),
+                   ncol = length(ExperimentNames))
+for (e_row in ExperimentNames) {
+  for (e_col in ExperimentNames) {
+    cat(e_row, e_col, "\n")
+    e_gene_idxs <- finaldf |> filter(experiment == e_row &
+                                       level == "diverged") |> 
+      select(gene_name) |> pull()
+    e_mean <- getPercentLevelDiv(.gene_idxs = e_gene_idxs,
+                                 .experiment_name = e_col)
+    plot_mat[which(ExperimentNames == e_row),
+             which(ExperimentNames == e_col)] <- e_mean
+  }
+}
+colnames(plot_mat) <- LongExperimentNames
+rownames(plot_mat) <- LongExperimentNames
+
+# plotting
+col_fun = colorRamp2(c(0, 1), c("white", "red2"))
+Heatmap(plot_mat, col = col_fun,
+        row_order = LongExperimentNames, column_order = LongExperimentNames,
+        row_names_side = "left", heatmap_legend_param = list(title = ""))
+
+#### Level divergence is consistent across environments ####
+
+# Heat map ordering genes by lfc in one environment per row (cols are genes)
+# Probably filter down to genes that are DE in at least one experiment
+levmatdf <- finaldf |> filter(experiment %in% ExperimentNames) |> 
+  mutate(effect_size_species = if_else((pvalue_species > 1e-5 & abs(effect_size_species) > 1),
+                                       true = 0,
+                                       false = effect_size_species)) |> 
+  select(gene_name, experiment, effect_size_species) |> 
+  pivot_wider(id_cols = experiment, names_from = gene_name, values_from = effect_size_species)
+levmat <- as.matrix(levmatdf[,-1])
+rownames(levmat) <- levmatdf$experiment
+levmat[is.na(levmat)] <- 0
+at_least_1_idxs <- finaldf |> filter(level == "diverged") |>
+  select(gene_name) |> pull() |> unique() |> intersect(y = colnames(levmat))
+
+# plotting
+col_fun = colorRamp2(c(-2, 0, 2), c("blue2", "lightyellow", "orange1"))
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/lev_heatmap.pdf",
+    width = 7, height = 2.5)
+Heatmap(levmat[, at_least_1_idxs],
+        column_labels = rep("", length(at_least_1_idxs)),
+        col = col_fun)
+dev.off()
+
+# example level-diverging gene groups across all environments
+# Saturated Growth increasing cluster, up in Scer
+gene_idxs <- finaldf |> filter(experiment == "HAP4" & group == "levupcer1") |> 
+  select(gene_name) |> pull()
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/avg_expr_level.pdf",
+    width = 7, height = 3)
+plotExpressionProfilePair(.cts1 = collapsed$cer[gene_idxs, info$experiment %in% ExperimentNames],
+                          .cts2 = collapsed$par[gene_idxs, info$experiment %in% ExperimentNames],
+                          .info1 = info[info$experiment %in% ExperimentNames,],
+                          .info2 = info[info$experiment %in% ExperimentNames,],
+                          .method = "line",
+                          .show_points = FALSE,
+                          .show_confidence_intervals = TRUE,
+                          .normalization = "log2",
+                          .plotlims = c(4, 9))
+dev.off()
+
+### Upset plot of strongest level divergers
+# TODO: Also collecting gene idxs to see if environment specificity affects cis/trans
+plotdf <- finaldf |> select(gene_name, experiment, effect_size_species) |> 
+  pivot_wider(id_cols = gene_name, values_from = effect_size_species,
+              names_from = experiment) |> 
+  drop_na() |> # removing genes that were lowly expressed in any environments
+  pivot_longer(cols = c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold"),
+               names_to = "experiment", values_to = "effect_size_species") |> 
+  filter(abs(effect_size_species) > 1) |>
+  mutate(up_cer = sign(effect_size_species) == 1,
+         up_par = sign(effect_size_species) == -1)
+# counts of how many environments the divergence was detected in
+# tagseq
+plotdf_tagseq <- plotdf |> filter(!(experiment %in% c("Heat", "Cold"))) |> 
+  group_by(gene_name) |> summarise(n_upcer = sum(effect_size_species > 1),
+                                   n_uppar = sum(effect_size_species < -1))
+# heat/cold
+plotdf_heatcold <- plotdf |> filter(experiment %in% c("Heat", "Cold")) |> 
+  group_by(gene_name) |> summarise(n_upcer = sum(effect_size_species > 1),
+                                   n_uppar = sum(effect_size_species < -1))
+
+# up_cer, tagseq
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/level_upsets_upcertagseq.pdf",
+    width = 5, height = 3)
+makeUpsetPlot(filter(plotdf, up_cer), 
+              .group_name = "experiment",
+              .group_members = c("HAP4", "CC", "LowN", "LowPi"),
+              .item_names = "gene_name")
+dev.off()
+# constitutive level-divergers
+constitutive_upcer_tagseq_idxs <- plotdf_tagseq |> filter(n_upcer == 4) |>
+  select(gene_name) |> 
+  pull()
+# single environment level-divergers
+hap4_upcer_idxs <- plotdf_tagseq |> filter(n_upcer == 1) |>
+  select(gene_name) |> 
+  pull() |> 
+  intersect(y = filter(plotdf, up_cer & experiment == "HAP4") |> 
+              select(gene_name) |> pull())
+cc_upcer_idxs <- plotdf_tagseq |> filter(n_upcer == 1) |>
+  select(gene_name) |> 
+  pull() |> 
+  intersect(y = filter(plotdf, up_cer & experiment == "CC") |> 
+              select(gene_name) |> pull())
+lown_upcer_idxs <- plotdf_tagseq |> filter(n_upcer == 1) |>
+  select(gene_name) |> 
+  pull() |> 
+  intersect(y = filter(plotdf, up_cer & experiment == "LowN") |> 
+              select(gene_name) |> pull())
+lowpi_upcer_idxs <- plotdf_tagseq |> filter(n_upcer == 1) |>
+  select(gene_name) |> 
+  pull() |> 
+  intersect(y = filter(plotdf, up_cer & experiment == "LowPi") |> 
+              select(gene_name) |> pull())
+
+# up_par, tagseq
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/level_upsets_uppartagseq.pdf",
+    width = 5, height = 3)
+makeUpsetPlot(filter(plotdf, up_par), 
+              .group_name = "experiment",
+              .group_members = c("HAP4", "CC", "LowN", "LowPi"),
+              .item_names = "gene_name")
+dev.off()
+# constitutive level-divergers
+constitutive_uppar_tagseq_idxs <- plotdf_tagseq |> filter(n_uppar == 4) |>
+  select(gene_name) |> 
+  pull()
+# single environment level-divergers
+hap4_uppar_idxs <- plotdf_tagseq |> filter(n_uppar == 1) |>
+  select(gene_name) |> 
+  pull() |> 
+  intersect(y = filter(plotdf, up_par & experiment == "HAP4") |> 
+              select(gene_name) |> pull())
+cc_uppar_idxs <- plotdf_tagseq |> filter(n_uppar == 1) |>
+  select(gene_name) |> 
+  pull() |> 
+  intersect(y = filter(plotdf, up_par & experiment == "CC") |> 
+              select(gene_name) |> pull())
+lown_uppar_idxs <- plotdf_tagseq |> filter(n_uppar == 1) |>
+  select(gene_name) |> 
+  pull() |> 
+  intersect(y = filter(plotdf, up_par & experiment == "LowN") |> 
+              select(gene_name) |> pull())
+lowpi_uppar_idxs <- plotdf_tagseq |> filter(n_uppar == 1) |>
+  select(gene_name) |> 
+  pull() |> 
+  intersect(y = filter(plotdf, up_par & experiment == "LowPi") |> 
+              select(gene_name) |> pull())
+
+# up_cer, heat/cold
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/level_upsets_upcerheatcold.pdf",
+    width = 3, height = 3)
+makeUpsetPlot(filter(plotdf, up_cer), 
+              .group_name = "experiment",
+              .group_members = c("Heat", "Cold"),
+              .item_names = "gene_name")
+dev.off()
+constitutive_upcer_heatcold_idxs <- plotdf_heatcold |> 
+  filter(n_upcer == 2) |>
+  select(gene_name) |> 
+  pull()
+heat_upcer_idxs <- plotdf_heatcold |> filter(n_upcer == 1) |>
+  select(gene_name) |> 
+  pull() |> 
+  intersect(y = filter(plotdf, up_cer & experiment == "Heat") |> 
+              select(gene_name) |> pull())
+cold_upcer_idxs <- plotdf_heatcold |> filter(n_upcer == 1) |>
+  select(gene_name) |> 
+  pull() |> 
+  intersect(y = filter(plotdf, up_cer & experiment == "Cold") |> 
+              select(gene_name) |> pull())
+
+# up_par, heat/cold
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/level_upsets_upparheatcold.pdf",
+    width = 3, height = 3)
+makeUpsetPlot(filter(plotdf, up_par), 
+              .group_name = "experiment",
+              .group_members = c("Heat", "Cold"),
+              .item_names = "gene_name")
+dev.off()
+constitutive_uppar_heatcold_idxs <- plotdf_heatcold |> 
+  filter(n_uppar == 2) |>
+  select(gene_name) |> 
+  pull()
+heat_uppar_idxs <- plotdf_heatcold |> filter(n_uppar == 1) |>
+  select(gene_name) |> 
+  pull() |> 
+  intersect(y = filter(plotdf, up_par & experiment == "Heat") |> 
+              select(gene_name) |> pull())
+cold_uppar_idxs <- plotdf_heatcold |> filter(n_uppar == 1) |>
+  select(gene_name) |> 
+  pull() |> 
+  intersect(y = filter(plotdf, up_par & experiment == "Cold") |> 
+              select(gene_name) |> pull())
+
+### Average expression and Gene Ontology of select level-divergers
+plotlims <- c(4, 10)
+
+# 1) Constitutive level-divergers upcer tagseq
+plotEnvironments(constitutive_upcer_tagseq_idxs)
+plotEnvironments(constitutive_upcer_tagseq_idxs, .quartet = TRUE)
+getGOSlimDf(.idxs = constitutive_upcer_tagseq_idxs, 
+            .group_name = "upcer_tagseq",
+            .min_hits = 3) |> View() # extracellular/cell wall proteins
+
+# 2) Consistent level-divergers uppar tagseq
+plotEnvironments(constitutive_uppar_tagseq_idxs)
+plotEnvironments(constitutive_uppar_tagseq_idxs, .quartet = TRUE)
+getGOSlimDf(.idxs = gene_idxs, .group_name = "uppar_tagseq",
+            .min_hits = 3) |> View() # mitochondrial translation/ribosomes
+
+# 3) Single environment upcer tagseq
+# HAP4
+plotEnvironments(hap4_upcer_idxs)
+plotEnvironments(hap4_upcer_idxs, .quartet = TRUE)
+# CC
+plotEnvironments(cc_upcer_idxs)
+plotEnvironments(cc_upcer_idxs, .quartet = TRUE)
+finaldf |> filter(gene_name %in% cc_upcer_idxs) |> 
+  select(dynamics, experiment) |> table() # these guys have a lot of dynamics divergence,
+# seems like they're expressed higher in Scer in lab conditions 
+# (hence why they're detected as level divergers in CC and dynamics
+# divergers in other environments)
+# LowN
+plotEnvironments(lown_upcer_idxs)
+plotEnvironments(lown_upcer_idxs, .quartet = TRUE)
+# LowPi
+plotEnvironments(lowpi_upcer_idxs)
+plotEnvironments(lowpi_upcer_idxs, .quartet = TRUE) # pretty trans!
+finaldf |> filter(gene_name %in% lowpi_upcer_idxs) |> 
+  select(dynamics, experiment) |> table() # genes aren't any more likely to diverge in dynamics in LowPi
+
+# 4) Single environment uppar tagseq
+# HAP4
+plotEnvironments(hap4_uppar_idxs) # fairly trans
+plotEnvironments(hap4_uppar_idxs, .quartet = TRUE)
+finaldf |> filter(gene_name %in% hap4_uppar_idxs) |> 
+  select(dynamics, experiment) |> table() 
+# a lot of dynamics divergence, but not significantly more in HAP4
+# CC
+plotEnvironments(cc_uppar_idxs)
+plotEnvironments(cc_uppar_idxs, .quartet = TRUE)
+finaldf |> filter(gene_name %in% cc_uppar_idxs) |> 
+  select(dynamics, experiment) |> table() # not as much dynamics divergence as upcer cc
+
+# LowN
+plotEnvironments(lown_uppar_idxs)
+plotEnvironments(lown_uppar_idxs, .quartet = TRUE) # these just look like weak level-divergers in every environment
+# LowPi
+plotEnvironments(lowpi_uppar_idxs)
+plotEnvironments(lowpi_uppar_idxs, .quartet = TRUE) # these just look like weak level-divergers in every environment
+
+# 5) Constitutive level-divergers upcer heat/cold
+plotEnvironments(constitutive_upcer_heatcold_idxs)
+plotEnvironments(constitutive_upcer_heatcold_idxs, .quartet = TRUE)
+getGOSlimDf(.idxs = constitutive_upcer_heatcold_idxs, .group_name = "upcer_heatcold",
+            .min_hits = 3) |> View() # mitochondrial
+
+# 6) Consistent level-divergers uppar heat/cold
+plotEnvironments(constitutive_uppar_heatcold_idxs)
+plotEnvironments(constitutive_uppar_heatcold_idxs, .quartet = TRUE)
+getGOSlimDf(.idxs = constitutive_uppar_heatcold_idxs, .group_name = "uppar_heatcold",
+            .min_hits = 3) |> View() # ribosome
+
+# 7) Upcer/Uppar unique to Heat/Cold
+plotEnvironments(heat_upcer_idxs)
+plotEnvironments(heat_upcer_idxs, .quartet = TRUE)
+plotEnvironments(heat_uppar_idxs)
+plotEnvironments(heat_uppar_idxs, .quartet = TRUE)
+plotEnvironments(cold_upcer_idxs)
+plotEnvironments(cold_upcer_idxs, .quartet = TRUE)
+plotEnvironments(cold_uppar_idxs)
+plotEnvironments(cold_uppar_idxs, .quartet = TRUE)
+
+# Takeaways:
+# 1) level divergence is consistent between environments for the same strains
+# 2) level divergence is 50-50 conserved-not conserved between different strains
+# 3) environment-specific level divergence has a moderate association with dynamics divergence
+
+#### Level divergence is independent from dynamics ####
+# We know from Krieger et al. 2020 that divergence in level does not predict dynamics
+# divergence in dynamics and vice-versa, but it's worth illustrating how this looks
+# among genes in different dynamics categories. How it's simply a raising or lowering of the
+# same dynamic pattern
+
+# For each divergence category (cons1, cons2, dyn12, dyn21) in each experiment, 
+# highlight portions of the l2fc density plot showing how the curves stay the same
+# and the height difference between species is what is changing
+
+griddf1 <- expand_grid(experiment = c("CC", "HAP4", "LowN", "LowPi"),
+                      cer = c(1, 2),
+                      par = c(1, 2))
+griddf2 <- expand_grid(experiment = c("Cold"),
+                       cer = c(1, 2, 3),
+                       par = c(1, 2, 3))
+griddf3 <- expand_grid(experiment = c("Heat"),
+                       cer = c(1, 2, 3, 4),
+                       par = c(1, 2, 3, 4))
+griddf <- bind_rows(griddf1, griddf2, griddf3)
+
+# plotting
+for (i in 1:nrow(griddf)) {
+  ex <- griddf$experiment[i]
+  cerclust <- griddf$cer[i]
+  parclust <- griddf$par[i]
+  plotdf <- filter(finaldf, experiment == ex & cer == cerclust & par == parclust) |> 
+    select(effect_size_species, gene_name)
+  if (nrow(plotdf) < 10) {
+    next
+  }
+  distbins <- quantile(plotdf$effect_size_species, probs = c(0, 0.2, 0.4, 0.6, 0.8, 1.0))
+  pdens <- ggplot(plotdf, aes(x = effect_size_species)) + geom_density() + theme_classic() +
+    xlab("log2 fold change") + 
+    geom_vline(xintercept = distbins)
+  plotlist <- vector(mode = "list", length = length(distbins) - 1)
+  for (i in 1:(length(distbins) - 1)) {
+    gidxs <- filter(plotdf, effect_size_species > distbins[i] & 
+                      effect_size_species <= distbins[i + 1]) |> 
+      select(gene_name) |> pull()
+    plotlist[[i]] <- annotate_figure(plotGenes(gidxs, .plotlims = c(0, 1200), .experiment_name = ex,
+                               .normalization = "none"), top = paste0(length(gidxs), " genes"))
+  }
+  pdf(file = paste0("../../aligning_the_molecular_phenotype/paper_figures/Supplement/level_independence/", 
+                    ex, cerclust, parclust, ".pdf"), width = 9, height = 5)
+  print(annotate_figure(ggarrange(pdens,
+            ggarrange(plotlist = plotlist, ncol = length(plotlist), nrow = 1),
+            nrow = 2), top = paste(nrow(plotdf), "genes", ex, "\nScer cluster:", cerclust, 
+                                    "Spar cluster:", parclust)))
+  dev.off()
+}
+
+#### discrete heatmap of level and dynamics divergence across experiments ####
+
+plotdf <- finaldf
+plot_mat <- plotdf |> 
+  select(gene_name, experiment, group4) |>
+  pivot_wider(id_cols = "gene_name",
+              names_from = "experiment", 
+              values_from = "group4")
+colnames_plotmat <- plot_mat$gene_name
+rownames_plotmat <- colnames(plot_mat)
+plot_mat <- data.frame(plot_mat) |> t()
+colnames(plot_mat) <- colnames_plotmat
+rownames(plot_mat) <- rownames_plotmat
+plot_mat <- plot_mat[rownames(plot_mat) != "gene_name",]
+plot_mat <- plot_mat |> as.matrix()
+clrs <- structure(levdyn_colordf$type, 
+                  names = levdyn_colordf$limits)
+majority_NA <- apply(plot_mat, 2, \(x) {return(sum(is.na(x)) > 2)})
+sum(majority_NA)
+plot_mat <- plot_mat[,!majority_NA]
+# sorting cols by HAP4's order
+col_order_vec <- order(factor(plot_mat["HAP4",], levels = levdyn_colordf$limits))
+# recursively order each subset of previous row
+orderGenesByGroup <- function(.mat, .row_idx = 1,
+                              .labels = levdyn_colordf$limits) {
+  if (ncol(.mat) == 1) {
+    return(.mat)
+  }
+  vec <- .mat[.row_idx,]
+  labels_present <- .labels[.labels %in% unique(vec)]
+  breaks <- factor(vec, levels = labels_present) |> 
+    table(useNA = "ifany") |> as.numeric()
+  cumulative_breaks <- breaks
+  for(i in 1:length(breaks)) {
+    cumulative_breaks[i] <- sum(breaks[1:i])
+  }
+  vec_order <- factor(vec, levels = .labels) |> order()
+  reordered_mat <- .mat[,vec_order]
+  if (.row_idx == nrow(.mat)) {
+    return(reordered_mat)
+  }
+  out_vec <- map2(.x = c(0, cumulative_breaks[-length(cumulative_breaks)]) + 1, 
+                  .y = cumulative_breaks, 
+                  .f = \(col_start, col_end) {
+                    orderGenesByGroup(.mat = reordered_mat[, col_start:col_end, drop = FALSE],
+                                      .row_idx = .row_idx + 1,
+                                      .labels = .labels)
+                  }) |> purrr::reduce(.f = cbind)
+  return(out_vec)
+}
+# # tests for orderGenesByGroup
+# orderGenesByGroup(.mat = rbind(c("hai", "der", "der", "hai"),
+#                                c("der", "der", "der", "hai")),
+#                   .labels = c("hai", "der"))
+# # subset of plotmat
+# orderGenesByGroup(.mat = plot_mat[, 1:100]) |> dim()
+
+# ordering full plotmat
+ordered_plot_mat <- orderGenesByGroup(.mat = plot_mat[ExperimentNames,])
+rownames(ordered_plot_mat) <- LongExperimentNames
+# plotting
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/discrete_heatmap.pdf",
+    width = 9, height = 1.5)
+Heatmap(ordered_plot_mat, 
+        col = clrs, show_column_names = FALSE,
+        row_order = rownames(ordered_plot_mat), 
+        column_order = colnames(ordered_plot_mat),
+        row_names_side = "left", heatmap_legend_param = list(title = ""))
+dev.off()
+
+#### Example expression profiles for figure ####
+# Low Phosphorus 1-2, dynamics divergers
+gene_idxs <- finaldf |> filter(experiment == "LowPi" & group == "dyn12") |> 
+  select(gene_name) |> pull()
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/LowPi12.pdf",
+    width = 12, height = 2)
+plotExpressionProfilePair(.cts1 = collapsed$cer[gene_idxs,],
+                          .cts2 = collapsed$par[gene_idxs,],
+                          .info1 = info,
+                          .info2 = info,,
+                          .method = "line",
+                          .show_points = FALSE,
+                          .show_confidence_intervals = TRUE,
+                          .normalization = "log2")
+dev.off()
+
+# upCer LowN, level divergers
+gene_idxs <- finaldf |> filter(experiment == "LowN" & level == "diverged" &
+                                 sign(effect_size_species) == 1) |> 
+  select(gene_name) |> pull()
+pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/LowN_upcer.pdf",
+    width = 12, height = 2)
+plotExpressionProfilePair(.cts1 = collapsed$cer[gene_idxs,],
+                          .cts2 = collapsed$par[gene_idxs,],
+                          .info1 = info,
+                          .info2 = info,,
+                          .method = "line",
+                          .show_points = FALSE,
+                          .show_confidence_intervals = TRUE,
+                          .normalization = "log2")
+dev.off()
+
+
 
 ############################## Archive ######################################
 # #### Probably Archive from here on down: Level and dynamics divergers only retain level divergence across environments ####
