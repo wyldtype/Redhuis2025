@@ -1,21 +1,641 @@
 sapply(c("tidyr", "dplyr", "purrr", "ggplot2", "bipartite", "ggpubr", "ggbeeswarm", "ComplexHeatmap", "circlize"), require, character.only=TRUE)
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2024/")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025/")
 source("functions_for_figure_scripts.R")
 load("data_files/FinalDataframe3Disp.RData")
 load("data_files/TFdel.RData")
 load("data_files/TFdel_DESeq2.RData")
+load("data_files/QC_TFdel.RData")
 load("data_files/Cleaned_Counts.RData")
 load("data_files/Cleaned_Counts_Allele.RData")
+load("data_files/GO_Slim.RData")
 
 TFnames <- setdiff(unique(gsub("delete", "", sample_info_tfdel$genotype)), "WT")
 p_thresh <- 0.05 # because DESeq2 already corrected for FDR with alpha = 0.05
 eff_thresh <- 1
-
-#### Which TFs are differentially expressed between species? ####
 TFdel_lookup <- read_delim("data_files/downloaded_genomes_and_features/yeastract_46TFs.csv", col_names = FALSE, col_select = c(1,2), delim = ";") # gets some warnings, but so far has been fine
 colnames(TFdel_lookup) <- c("common", "systematic")
+
+#### Data cleaning/organizing ####
+### Filtering TFdeldf down to genes with cpm > 30 in LowN and merging it with LowN cluster definitions
+TFdeldf <- filter(TFdeldf, gene_name %in% unlist(finaldf[finaldf$experiment == "LowN","gene_name"])) |> 
+  left_join(y = filter(finaldf, experiment == "LowN") |> select(gene_name, cer, par, hyc, hyp,
+                                                                level, dynamics),
+            by = "gene_name")
+TFdeldf_sham1 <- filter(TFdeldf_sham1, gene_name %in% unlist(finaldf[finaldf$experiment == "LowN","gene_name"])) |> 
+  left_join(y = filter(finaldf, experiment == "LowN") |> select(gene_name, cer, par, hyc, hyp,
+                                                                level, dynamics),
+            by = "gene_name")
+TFdeldf_sham2 <- filter(TFdeldf_sham2, gene_name %in% unlist(finaldf[finaldf$experiment == "LowN","gene_name"])) |> 
+  left_join(y = filter(finaldf, experiment == "LowN") |> select(gene_name, cer, par, hyc, hyp,
+                                                                level, dynamics),
+            by = "gene_name")
+
+# doing the same to the standardized mean differences TF effects df
+SMDdf <- mutate(SMDdf, lfc = smd,
+                padj = 1-pnorm(abs(smd))) |> 
+  left_join(y = filter(finaldf, experiment == "LowN") |> select(gene_name, cer, par, hyc, hyp,
+                                                                level, dynamics),
+            by = "gene_name")
+
+### QC: TF expression in TF deletion genotypes
+TFdel_lookup |> filter(common == "HAP1")
+# parents
+plotdf <- bind_cols(tibble(gene_name = setdiff(TFdel_lookup$systematic, "YLR256W"),
+                           common = setdiff(TFdel_lookup$common, "HAP1")),
+                    counts_tfdel[setdiff(TFdel_lookup$systematic, "YLR256W"),]) |> 
+  pivot_longer(cols = colnames(counts_tfdel),
+               names_to = "sample_name",
+               values_to = "expr") |> 
+  left_join(y = sample_info_tfdel, by = "sample_name") |> 
+  filter(genotype == "WT" |
+           paste0(common, "delete") == genotype)
+# cer
+ggplot(filter(plotdf, organism == "cer"),
+       aes(x = paste(common, gsub(pattern = "delete", replacement = "", genotype),
+                     sep = "_"), y = expr)) + 
+  geom_point(aes(shape = time_point_str,
+                 color = common)) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))  +
+  ylim(c(0, max(plotdf$expr)))
+# one RPN4 sample, TP3, is a little high:
+counts_tfdel["YDL020C", sample_info_tfdel$genotype == "RPN4delete" &
+               sample_info_tfdel$organism == "cer"]
+# par
+ggplot(filter(plotdf, organism == "par"),
+       aes(x = paste(common, gsub(pattern = "delete", replacement = "", genotype),
+                         sep = "_"), y = expr)) + 
+  geom_point(aes(shape = time_point_str,
+                 color = common)) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  ylim(c(0, max(plotdf$expr)))
+# one Par GCN4delete replicate appears to have WT GCN4 expression:
+TFdel_lookup |> filter(common == "GCN4")
+counts_tfdel["YEL009C", sample_info_tfdel$genotype == "GCN4delete" &
+               sample_info_tfdel$organism == "par"] |> sort()
+# P2_C5_A10_GS5 seems fine, but P1_C2_A4_GS2 replicates (and P1_C5_A10_GS2 to some extent) are too high
+
+# hybrid
+plotdf <- bind_cols(tibble(gene_name = setdiff(TFdel_lookup$systematic, "YLR256W"),
+                           common = setdiff(TFdel_lookup$common, "HAP1")),
+                    counts_tfdel_allele[setdiff(TFdel_lookup$systematic, "YLR256W"),]) |> 
+  pivot_longer(cols = colnames(counts_tfdel_allele),
+               names_to = "sample_name",
+               values_to = "expr") |> 
+  left_join(y = sample_info_tfdel_allele, by = "sample_name") |> 
+  filter(genotype == "WT" |
+           paste0(common, "delete") == genotype)
+# cer allele
+ggplot(filter(plotdf, allele == "cer"),
+       aes(x = paste(common, gsub(pattern = "delete", replacement = "", genotype),
+                         sep = "_"), y = expr)) + 
+  geom_point(aes(shape = time_point_str,
+                 color = common)) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  ylim(c(0, max(plotdf$expr)))
+# par allele
+ggplot(filter(plotdf, allele == "par"),
+       aes(x = paste(common, gsub(pattern = "delete", replacement = "", genotype),
+                     sep = "_"), y = expr)) + 
+  geom_point(aes(shape = time_point_str,
+                 color = common)) +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  ylim(c(0, max(plotdf$expr)))
+
+### removing problematic GCN4delete Spar replicate
+bad_gcn4_sample_names <- filter(sample_info_tfdel, !grepl(sample_name, pattern = "P2_C5_A10_GS5") &
+                                  genotype == "GCN4delete" &
+                                  organism == "par") |> 
+  select(sample_name) |> pull()
+counts_tfdel <- counts_tfdel[, !(sample_info_tfdel$sample_name %in% bad_gcn4_sample_names)]
+sample_info_tfdel <- sample_info_tfdel |> filter(!(sample_name %in% bad_gcn4_sample_names))
+
+### Filtering for TFs with 2+ replicates
+# TFs with 2 replicates at TP1 in cer/par:
+parent_tf_tab <- sample_info_tfdel |> filter(time_point_str == "0 h, YPD" &
+                                               genotype != "WT") |> 
+  select(genotype, organism) |> table()
+parent_goodf_tfs_tp1 <- rownames(parent_tf_tab)[apply(parent_tf_tab, 1, \(x) {all(x > 1)})] |> 
+  gsub(pattern = "delete", replacement = "")
+parent_goodf_tfs_tp1
+# TFs with 2 replicates at TP3 in cer/par:
+parent_tf_tab <- sample_info_tfdel |> filter(time_point_str == "16 h, low N" &
+                                               genotype != "WT") |> 
+  select(genotype, organism) |> table()
+parent_goodf_tfs_tp3 <- rownames(parent_tf_tab)[apply(parent_tf_tab, 1, \(x) {all(x > 1)})] |> 
+  gsub(pattern = "delete", replacement = "")
+parent_goodf_tfs_tp3
+# TFs with 2 replicates at TP1 in hyc/hyp:
+hybrid_tf_tab <- sample_info_tfdel_allele |> filter(time_point_str == "0 h, YPD" &
+                                                      genotype != "WT") |> 
+  select(genotype, allele) |> table()
+hybrid_goodf_tfs_tp1 <- rownames(hybrid_tf_tab)[apply(hybrid_tf_tab, 1, \(x) {all(x > 1)})] |> 
+  gsub(pattern = "delete", replacement = "")
+hybrid_goodf_tfs_tp1
+# TFs with 2 replicates at TP2 in hyc/hyp:
+hybrid_tf_tab <- sample_info_tfdel_allele |> filter(time_point_str == "1 h, low N" &
+                                                      genotype != "WT") |> 
+  select(genotype, allele) |> table()
+hybrid_goodf_tfs_tp2 <- rownames(hybrid_tf_tab)[apply(hybrid_tf_tab, 1, \(x) {all(x > 1)})] |> 
+  gsub(pattern = "delete", replacement = "")
+hybrid_goodf_tfs_tp2
+# TFs with 2 replicates at TP3 in hyc/hyp:
+hybrid_tf_tab <- sample_info_tfdel_allele |> filter(time_point_str == "16 h, low N" &
+                                                      genotype != "WT") |> 
+  select(genotype, allele) |> table()
+hybrid_goodf_tfs_tp3 <- rownames(hybrid_tf_tab)[apply(hybrid_tf_tab, 1, \(x) {all(x > 1)})] |> 
+  gsub(pattern = "delete", replacement = "")
+hybrid_goodf_tfs_tp3
+# TFs with 2 replicates in parents for both timepoints:
+goodTFs_parents <- intersect(parent_goodf_tfs_tp1, parent_goodf_tfs_tp3)
+goodTFs_parents
+# TFs missing from hybrid TP1:
+setdiff(goodTFs_parents, hybrid_goodf_tfs_tp1)
+# TFs missing from hybrid TP3:
+setdiff(goodTFs_parents, hybrid_goodf_tfs_tp3)
+# Final set of 31:
+goodTFs <- intersect(goodTFs_parents, 
+                     intersect(hybrid_goodf_tfs_tp1, hybrid_goodf_tfs_tp3))
+### Ordering TFs by total number of effects, any organism/timepoint
+tf_order <- TFdeldf |> filter(padj < p_thresh &
+                                deletion %in% goodTFs) |> 
+  select(deletion) |> table() |> sort(decreasing = TRUE) |> names()
+length(goodTFs)
+length(tf_order)
+# conveniently the maximum number that ComplexHeatmap will allow in an upset plot:
+makeUpsetPlot(.df = filter(TFdeldf, 
+                           organism == "par" & timepoint == "TP1" &
+                             padj < p_thresh), 
+              .group_name = "deletion", 
+              .group_members = tf_order,
+              .item_names = "gene_name")
+
+### Adding TFdeldf columns
+### Classifying genes as level or dynamics divergers
+checkEffect <- function(.lfcs, .pvals) {
+  if (length(.lfcs) != length(.pvals)) {
+    stop("vectors are not the same length\n")
+  }
+  if (length(.lfcs) < 2) {
+    return("single") # only have data from a single timepoint---level vs dynamics cannot be distinguished
+  }
+  if (all(.pvals > p_thresh)) {
+    return("none")
+  }
+  if (all(.pvals < p_thresh)) {
+    if (length(unique(sign(.lfcs))) == 1) {
+      return("level")
+    }
+    if (length(unique(sign(.lfcs))) == 2) {
+      return("dynamics")
+    }
+  }
+  else {
+    return("dynamics")
+  }
+}
+# tests for checkEffect
+checkEffect(c(5, 3), c(0.001, 0.0005)) # level
+checkEffect(c(0.5, 3), c(0.001, 0.0005)) # one effect size isn't over the eff_thresh, still level
+checkEffect(c(54, -9, 5), c(1, 1, 0.1)) # none, no sig pvalues
+checkEffect(c(54, -9, -0.5), c(1, 1, 0.01)) # dynamics
+checkEffect(c(2, -1), c(0.04, 0.01)) # dynamics
+
+effectdf <- TFdeldf |>
+  filter(timepoint != "TP2") |>
+  group_by(deletion, gene_name, organism) |>
+  summarise(effect = checkEffect(.lfcs = lfc, .pvals = padj)) |>
+  ungroup()
+effectdf |> select(organism, effect) |> table()
+
+# group tf effects into whether they reduce or increase expression variation between TP1 and TP3
+checkVarReducing <- function(.tp, .clust, .lfc_sign) {
+  if (.clust == 0) {
+    return(FALSE)
+  }
+  if (.clust == 1 & .tp == "TP1" & .lfc_sign == 1) {
+    return(TRUE)
+  }
+  if (.clust == 1 & .tp == "TP3" & .lfc_sign == -1) {
+    return(TRUE)
+  }
+  if (.clust == 2 & .tp == "TP1" & .lfc_sign == -1) {
+    return(TRUE)
+  }
+  if (.clust == 2 & .tp == "TP3" & .lfc_sign == 1) {
+    return(TRUE)
+  }
+  else {
+    return(FALSE)
+  }
+}
+# # tests for checkVarReducing
+# checkVarReducing("TP1", .clust = 1, .lfc_sign = 1) # increasing genes are low at TP1, positive lfc will bring them back to center
+# checkVarReducing("TP1", .clust = 0, .lfc_sign = 1) # never var reducing for static genes
+# checkVarReducing("TP3", .clust = 1, .lfc_sign = 1) # increasing genes are already up at TP3
+
+# isVarReducing
+vardf <- TFdeldf |> filter(organism %in% c("cer", "par")) |> 
+  mutate(clust = if_else(organism == "cer",
+                         true = cer,
+                         false = par)) |> filter(padj < p_thresh)
+
+vardf$isVarReducing <- map(c(1:nrow(vardf)), \(i) {
+  cat(vardf$timepoint[i], vardf$clust[i], sign(vardf$lfc[i]), "\n")
+  checkVarReducing(.tp = vardf$timepoint[i],
+                   .clust = vardf$clust[i],
+                   .lfc_sign = sign(vardf$lfc[i]))
+}) |> unlist()
+
+# tf_effect_conserved
+TFdeldf <- mutate(TFdeldf,
+                  parents_or_hybrid = if_else(organism %in% c("cer", "par"),
+                                              true = "parents",
+                                              false = "hybrid"))
+consdf <- TFdeldf |> filter(timepoint != "TP2" &
+                              padj < p_thresh) |>
+  group_by(timepoint, deletion, gene_name, parents_or_hybrid) |> 
+  summarise(tf_effect_conserved = if_else(length(lfc) > 1,
+                                          true = all(padj < p_thresh) & 
+                                            length(unique(sign(lfc))) == 1,
+                                          false = FALSE))
+
+# Adding columns
+vardf <- bind_rows(vardf, mutate(vardf, organism = if_else(organism == "cer",
+                                                           true = "hyc",
+                                                           false = "hyp")))
+
+
+
+TFdeldf <- left_join(TFdeldf, select(vardf, -clust),
+                     by = colnames(TFdeldf),
+                     relationship = "many-to-one")
+TFdeldf <- left_join(TFdeldf, consdf,
+                     by = c("timepoint", "deletion", "gene_name", "parents_or_hybrid"),
+                     relationship = "many-to-one")
+TFdeldf$lfc_sign <- sign(TFdeldf$lfc)
+TFdeldf <- left_join(TFdeldf, effectdf,
+                     by = c("deletion", "gene_name", "organism"),
+                     relationship = "many-to-one")
+
+### Turning grouping variables of TFdeldf into factors so we can order
+# them meaningfully
+pre_Factor <- TFdeldf
+TFdeldf$cer <- factor(TFdeldf$cer, levels = c("1", "2", "0"))
+TFdeldf$par <- factor(TFdeldf$par, levels = c("1", "2", "0"))
+TFdeldf$hyc <- factor(TFdeldf$hyc, levels = c("1", "2", "0"))
+TFdeldf$hyp <- factor(TFdeldf$hyp, levels = c("1", "2", "0"))
+table(pre_Factor$cer, TFdeldf$cer) # make sure they are the same value still
+
+#### Establishing mean/var expectations for different plasticity clusters ####
+
+load("data_files/Cleaned_Counts.RData")
+cer_counts <- counts[, sample_info$organism == "cer" &
+                       sample_info$experiment != "LowN"]
+par_counts <- counts[, sample_info$organism == "par" &
+                       sample_info$experiment != "LowN"]
+plotdf <- bind_rows(x = tibble(gene_name = rownames(cer_counts),
+                               mean_expr = rowMeans(cer_counts),
+                               var_expr = rowVars(cer_counts),
+                               organism = "cer"),
+                    y = tibble(gene_name = rownames(par_counts),
+                               mean_expr = rowMeans(par_counts),
+                               var_expr = rowVars(par_counts),
+                               organism = "par")) |> 
+  right_join(TFdeldf, by = c("gene_name", "organism")) |> 
+  filter(padj < p_thresh) |> 
+  group_by(gene_name, cer, par, dynamics, organism,
+           timepoint, mean_expr, var_expr) |> 
+  summarise(n_tfs = n(),
+            tfs = list(deletion)) |> 
+  ungroup()
+plotdf$is_highly_connected <- plotdf$n_tfs >= ntf_cutoff
+plotdf$plasticityCategory <- map2(plotdf$cer, plotdf$par, \(x, y) {
+  if ((x == "1" & y == "1") |
+      (x == "2" & y == "2")) {
+    return("Conserved Plastic")
+  }
+  if (x == "0" & y == "0") {
+    return("Conserved Static")
+  }
+  if ((x %in% c("1", "2") & y == "0") |
+      (y %in% c("1", "2") & x == "0")) {
+    return("Diverged Platic One")
+  }
+  if ((x == "1" & y == "2") |
+      (x == "2" & y == "1")) {
+    return("Diverged Plastic Both")
+  }
+}) |> unlist()
+# Var/Mean by plasticity category
+p1 <- ggplot(plotdf, aes(x = log2(mean_expr))) + 
+  geom_density(aes(fill = plasticityCategory), alpha = 0.5) +
+  theme_classic() +
+  xlab("Mean Expression (log2)")
+p2 <- ggplot(plotdf, aes(x = log2(var_expr))) + 
+  geom_density(aes(fill = plasticityCategory), alpha = 0.5) +
+  theme_classic() +
+  xlab("Var Expression (log2)")
+ggarrange(p1, p2, common.legend = TRUE,
+          legend = "right", ncol = 1, nrow = 2)
+# Mean
+ggplot(plotdf, aes(x = log2(mean_expr), y = n_tfs)) + 
+  geom_point(aes(color = dynamics))
+ggplot(plotdf, aes(x = log2(mean_expr))) + 
+  geom_density(aes(fill = dynamics), alpha = 0.5)
+ggplot(plotdf, aes(x = log2(mean_expr))) + 
+  geom_density(aes(fill = is_highly_connected), alpha = 0.5)
+# Variance
+ggplot(plotdf, aes(x = log2(var_expr), y = n_tfs)) + 
+  geom_point(aes(color = dynamics)) +
+  geom_smooth(aes(color = dynamics), method = "lm")
+ggplot(plotdf, aes(x = log2(var_expr))) + 
+  geom_density(aes(fill = dynamics), alpha = 0.5)
+# the most highly connected genes do have much higher variance:
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/var_density.pdf",
+    width = 3.5, height = 2)
+ggplot(plotdf, aes(x = log2(var_expr))) + 
+  geom_density(aes(fill = is_highly_connected), alpha = 0.5) +
+  scale_fill_discrete(type = c("grey", "purple"),
+                      limits = c(FALSE, TRUE),
+                      labels = c(paste0("< ", ntf_cutoff, " TFs affecting gene"),
+                                 paste0(ntf_cutoff, " + TFs affecting gene"))) + 
+  xlab("expression variance across \nenvironments (log2 scale)") +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        legend.position = "right")
+dev.off()
+
+# Is there an excess of variance among highly connected genes, controlling for mean?
+# not highly connected
+ggplot(plotdf, aes(x = log2(mean_expr), y = log2(var_expr))) +
+  geom_point(data = filter(plotdf, !is_highly_connected),
+             aes(color = is_highly_connected), alpha = 0.1) +
+  geom_smooth(method = "lm")
+# highly connected
+ggplot(plotdf, aes(x = log2(mean_expr), y = log2(var_expr))) +
+  geom_point(data = filter(plotdf, is_highly_connected),
+             aes(color = is_highly_connected), alpha = 0.1) +
+  geom_smooth(method = "lm") # doesn't look like it
+
+#### Heatmap function ####
+# May move to functions script if I can get it to not
+# reference global variables and if I can make it more intuitive
+col_fun <- colorRamp2(c(0, 10, 30, 100), c("blue", "yellow", "red", "magenta"))
+col_legend <- print(Legend(col_fun = col_fun, title = "count", title_position = "lefttop-rot",
+       legend_height = unit(4, "cm")))
+dev.off()
+draw(col_legend)
+
+#### Level #1: One species, one timepoint ####
+
+# Scer TP1
+makeGeneGroupHeatmap(.df = filter(TFdeldf,
+                                  timepoint == "TP1" &
+                                    organism == "cer"),
+                     .tf_order = tf_order,
+                     .groups = c("lfc_sign"),
+                     .title = paste("cer", "TP1", sep = "\n"),
+                     .col_fun = col_fun1)
+
+# each organism/timepoint
+col_fun1 <- colorRamp2(c(0, 10, 100, 300), c("blue", "yellow", "red", "magenta"))
+col_legend1 <- print(Legend(col_fun = col_fun1, title = "count", title_position = "lefttop-rot",
+                           legend_height = unit(4, "cm")))
+dev.off()
+draw(col_legend1) # special legend/color scale for this plot b/c there are so many genes
+plotlist <- vector(mode = "list", length = 0)
+for (org in c("cer", "par", "hyc", "hyp")) {
+  for (tp in c("TP1", "TP3")) {
+    plotlist[[paste(org, tp, sep = "_")]] <- makeGeneGroupHeatmap(.df = filter(TFdeldf,
+                                                                               timepoint == tp &
+                                                                                 organism == org),
+                                                                  .tf_order = tf_order,
+                                                                  .groups = c("lfc_sign"),
+                                                                  .title = paste(org, tp, sep = "\n"),
+                                                                  .col_fun = col_fun1)
+  }
+}
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/Level1/heatmap.pdf",
+    width = 6, height = 7)
+purrr::reduce(plotlist, .f = `+`)
+dev.off()
+
+#### Level #2: One species, two timepoints ####
+# Scer
+p_tp1_lev <- makeGeneGroupHeatmap(.df = filter(TFdeldf,
+                                               timepoint == "TP1" &
+                                                 organism == "cer" & 
+                                                 effect == "level"),
+                                  .tf_order = tf_order,
+                                  .groups = c("lfc_sign"),
+                                  .title = paste("cer", "TP1", "both TPs", sep = "\n"),
+                                  .col_fun = col_fun1)
+p_tp3_lev <- makeGeneGroupHeatmap(.df = filter(TFdeldf,
+                                               timepoint == "TP3" &
+                                                 organism == "cer" & 
+                                                 effect == "level"),
+                                  .tf_order = tf_order,
+                                  .groups = c("lfc_sign"),
+                                  .title = paste("cer", "TP3", "both TPs", sep = "\n"),
+                                  .col_fun = col_fun1)
+p_tp1_dyn <- makeGeneGroupHeatmap(.df = filter(TFdeldf,
+                                               timepoint == "TP1" &
+                                                 organism == "cer" & 
+                                                 effect == "dynamics"),
+                                  .tf_order = tf_order,
+                                  .groups = c("lfc_sign"),
+                                  .title = paste("cer", "TP1", "one TP", sep = "\n"),
+                                  .col_fun = col_fun1)
+p_tp3_dyn <- makeGeneGroupHeatmap(.df = filter(TFdeldf,
+                                               timepoint == "TP3" &
+                                                 organism == "cer" & 
+                                                 effect == "dynamics"),
+                                  .tf_order = tf_order,
+                                  .groups = c("lfc_sign"),
+                                  .title = paste("cer", "TP3", "one TP", sep = "\n"),
+                                  .col_fun = col_fun1)
+p_tp1_lev + p_tp3_lev + p_tp1_dyn + p_tp3_dyn
+
+# both TPs
+plotlist <- vector(mode = "list", length = 0)
+for (org in c("cer", "par", "hyc", "hyp")) {
+  for (tp in c("TP1", "TP3")) {
+    plotlist[[paste(org, tp, sep = "_")]] <- makeGeneGroupHeatmap(.df = filter(TFdeldf,
+                                                                               timepoint == tp &
+                                                                                 organism == org & 
+                                                                                 effect == "level"),
+                                                                  .tf_order = tf_order,
+                                                                  .groups = c("lfc_sign"),
+                                                                  .title = paste(org, tp, sep = "\n"),
+                                                                  .col_fun = col_fun1)
+  }
+}
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/Level2/heatmap_bothTPs.pdf",
+    width = 6, height = 7)
+purrr::reduce(plotlist, .f = `+`)
+dev.off()
+
+# only one TP, or opposite directions at each TP
+plotlist <- vector(mode = "list", length = 0)
+for (org in c("cer", "par", "hyc", "hyp")) {
+  for (tp in c("TP1", "TP3")) {
+    plotlist[[paste(org, tp, sep = "_")]] <- makeGeneGroupHeatmap(.df = filter(TFdeldf,
+                                                                               timepoint == tp &
+                                                                                 organism == org & 
+                                                                                 effect == "dynamics"),
+                                                                  .tf_order = tf_order,
+                                                                  .groups = c("lfc_sign"),
+                                                                  .title = paste(org, tp, sep = "\n"),
+                                                                  .col_fun = col_fun1)
+  }
+}
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/Level2/heatmap_oneTP.pdf",
+    width = 6, height = 7)
+purrr::reduce(plotlist, .f = `+`)
+dev.off()
+
+# LFC estimates are only large at one TP
+# Scatterplots of individual TFdel in one species, TP1 vs TP3
+plotScatterTF <- function(.tf, .org, .df = TFdeldf) {
+  plotdf <- filter(.df, deletion == .tf &
+                     organism == .org &
+                     timepoint != "TP2") |> 
+    pivot_wider(id_cols = c("gene_name", "cer", "par", "hyc", "hyp"), names_from = "timepoint",
+                values_from = c("lfc", "padj")) |> 
+    filter(padj_TP1 < p_thresh | padj_TP3 < p_thresh)
+  plot_max <- max(abs(c(plotdf$lfc_TP1, plotdf$lfc_TP3)))
+  ggplot(plotdf, aes(x = lfc_TP1, y = lfc_TP3)) +
+    geom_abline(slope = 1, intercept = 0) +
+    geom_vline(xintercept = 0) +
+    geom_hline(yintercept = 0) +
+    geom_point(aes(color = if_else(abs(lfc_TP1) > eff_thresh,
+                                   true = if_else(abs(lfc_TP3) > eff_thresh,
+                                                  true = "both",
+                                                  false = "TP1"),
+                                   false = if_else(abs(lfc_TP3) > eff_thresh,
+                                                   true = "TP3",
+                                                   false = "none")),
+                   shape = as.character(.data[[.org]]))) +
+    theme_classic() +
+    theme(legend.title = element_blank()) +
+    ylim(c(-plot_max, plot_max)) +
+    xlim(c(-plot_max, plot_max))
+}
+plotScatterTF(.tf = "MET28", .org = "cer")
+plotScatterTF(.tf = "MET28", .org = "cer", .df = SMDdf)
+plotScatterTF(.tf = "URE2", .org = "cer")
+plotScatterTF(.tf = "URE2", .org = "cer", .df = SMDdf)
+plotScatterTF(.tf = "AFT1", .org = "cer")
+plotScatterTF(.tf = "AFT1", .org = "cer", .df = SMDdf)
+
+#### Level #3: Two species, two timepoints ####
+# conserved and diverged tf effects
+plotlist <- vector(mode = "list", length = 0)
+for (org in c("cer", "par", "hyc", "hyp")) {
+  for (tp in c("TP1", "TP3")) {
+    plotlist[[paste(org, tp, sep = "_")]] <- makeGeneGroupHeatmap(.df = filter(TFdeldf,
+                                                                               timepoint == tp &
+                                                                                 organism == org),
+                                                                  .tf_order = tf_order,
+                                                                  .groups = c("lfc_sign"),
+                                                                  .title = paste(org, tp, sep = "\n"),
+                                                                  .col_fun = col_fun1)
+  }
+}
+plotlist$cer_TP1 + plotlist$cer_TP3 + plotlist$par_TP1 + plotlist$par_TP3
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/Level3/heatmap.pdf",
+    width = 6, height = 7)
+purrr::reduce(plotlist, .f = `+`)
+dev.off()
+
+# conserved tf effects
+plotlist <- vector(mode = "list", length = 0)
+for (org in c("cer", "par", "hyc", "hyp")) {
+  for (tp in c("TP1", "TP3")) {
+    plotlist[[paste(org, tp, sep = "_")]] <- makeGeneGroupHeatmap(.df = filter(TFdeldf,
+                                                                               timepoint == tp &
+                                                                                 organism == org & 
+                                                                                 tf_effect_conserved),
+                                                                  .tf_order = tf_order,
+                                                                  .groups = c("lfc_sign"),
+                                                                  .title = paste(org, tp, sep = "\n"),
+                                                                  .col_fun = col_fun1)
+  }
+}
+plotlist$cer_TP1 + plotlist$cer_TP3 + plotlist$par_TP1 + plotlist$par_TP3
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/Level3/heatmap_conserved.pdf",
+    width = 6, height = 7)
+purrr::reduce(plotlist, .f = `+`)
+dev.off()
+
+# diverged tf effects
+plotlist <- vector(mode = "list", length = 0)
+for (org in c("cer", "par", "hyc", "hyp")) {
+  for (tp in c("TP1", "TP3")) {
+    plotlist[[paste(org, tp, sep = "_")]] <- makeGeneGroupHeatmap(.df = filter(TFdeldf,
+                                                                               timepoint == tp &
+                                                                                 organism == org & 
+                                                                                 !tf_effect_conserved),
+                                                                  .tf_order = tf_order,
+                                                                  .groups = c("lfc_sign"),
+                                                                  .title = paste(org, tp, sep = "\n"),
+                                                                  .col_fun = col_fun1)
+  }
+}
+plotlist$cer_TP1 + plotlist$cer_TP3 + plotlist$par_TP1 + plotlist$par_TP3
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/Level3/heatmap_diverged.pdf",
+    width = 6, height = 7)
+purrr::reduce(plotlist, .f = `+`)
+dev.off()
+
+#### Level #4: Regulatory divergence, conserved vs diverged plasticity ####
+plotlist <- vector(mode = "list", length = 0)
+for (cons in c(TRUE, FALSE)) {
+  for (tp in c("TP1", "TP3")) {
+    plotlist[[paste(tp, cons, sep = "_")]] <- makeGeneGroupHeatmap(.df = filter(TFdeldf,
+                                                                                parents_or_hybrid == "parents" &
+                                                                                  timepoint == tp &
+                                                                                  tf_effect_conserved == cons),
+                                                                   .tf_order = tf_order,
+                                                                   .groups = c("dynamics", "cer", "par", "lfc_sign", "organism"),
+                                                                  .title = paste(tp, cons),
+                                                                  .col_fun = col_fun1)
+  }
+}
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/Level4/heatmap.pdf",
+    width = 15, height = 8)
+plotlist
+dev.off()
+
+#### Level #5: Regulatory divergence, conserved vs diverged plasticity, Parent vs hybrid ####
+plotlist <- vector(mode = "list", length = 0)
+for (cons in c(TRUE, FALSE)) {
+  for (tp in c("TP1", "TP3")) {
+    plotlist[[paste(tp, cons, sep = "_")]] <- makeGeneGroupHeatmap(.df = filter(TFdeldf,
+                                                                                parents_or_hybrid == "hybrid" &
+                                                                                  timepoint == tp &
+                                                                                  tf_effect_conserved == cons),
+                                                                   .tf_order = tf_order,
+                                                                   .groups = c("dynamics", "cer", "par", "lfc_sign", "organism"),
+                                                                   .title = paste(tp, cons),
+                                                                   .col_fun = col_fun1)
+  }
+}
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/Level5/heatmap.pdf",
+    width = 15, height = 8)
+plotlist
+dev.off()
+
+#### QC: TFdeldfs with shams ####
+# TODO: repeat plots with TFdeldf_sham1 and 2
+
+#### Which TFs are differentially expressed between species? ####
 TFdf <- finaldf |> select(gene_name, effect_size_species, pvalue_species, experiment) |>
-  right_join(y = TFdel_lookup, by = c("gene_name"="systematic"), 
+  right_join(y = TFdel_lookup, by = c("gene_name"="systematic"),
              relationship = "many-to-one")
 
 # heatmap of TF lfc between species in each environment
@@ -26,7 +646,7 @@ effectsdf <- TFdf |>
               values_from = "effect_size_species")
 effects_mat <- select(effectsdf, -common) |> as.matrix()
 rownames(effects_mat) <- effectsdf$common
-effects_mat[is.na(effects_mat)] <- 0
+effects_mat[is.na(effects_mat)] <- 0 # Heatmap can't handle the number of NAs
 pvalsdf <- TFdf |> 
   drop_na() |> 
   select(common, experiment, pvalue_species) |> 
@@ -34,11 +654,13 @@ pvalsdf <- TFdf |>
               values_from = "pvalue_species")
 pvals_mat <- select(pvalsdf, -common) |> as.matrix()
 rownames(pvals_mat) <- pvalsdf$common
-pvals_mat[is.na(pvals_mat)] <- 0
+pvals_mat[is.na(pvals_mat)] <- 1
+
 col_fun <- colorRamp2(c(-2, 0, 2), c("blue2", "lightyellow", "orange1"))
 pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/TFheatmap.pdf", 
     width = 3, height = 8)
-Heatmap(effects_mat, col = col_fun,
+Heatmap(effects_mat, col = col_fun, na_col = "grey",
+        column_order = c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold"),
         cell_fun = function(j, i, x, y, width, height, fill) {
   output <- ifelse(pvals_mat[i, j] < 1e-5, yes = "*", no = "")
     grid.text(output, x, y, gp = gpar(fontsize = 10))
@@ -91,20 +713,9 @@ finaldf |> filter(gene_name %in% TFdel_lookup$systematic) |>
   select(common, dynamics) |> 
   table()
 # BAS1 has especially different dynamics in LowN. But it's mainly the 1hr timepoint plus a level effect
-annotate_figure(plotExpressionProfileTFdel(.cts1 = counts_tfdel["YKR099W", sample_info_tfdel$organism == "cer" &
-                                                                  sample_info_tfdel$genotype == "WT", drop = FALSE],
-                                           .cts2 = counts_tfdel["YKR099W", sample_info_tfdel$organism == "par" &
-                                                                  sample_info_tfdel$genotype == "WT", drop = FALSE],
-                                           .cts3 = counts_tfdel["YKR099W", sample_info_tfdel$organism == "cer" & 
-                                                                  sample_info_tfdel$genotype == "BAS1delete", drop = FALSE],
-                                           .cts4 = counts_tfdel["YKR099W", sample_info_tfdel$organism == "par" &
-                                                                  sample_info_tfdel$genotype == "BAS1delete", drop = FALSE],
-                                          .info1 = filter(sample_info_tfdel, organism == "cer" & genotype == "WT"),
-                                          .info2 = filter(sample_info_tfdel, organism == "par" & genotype == "WT"),
-                                          .info3 = filter(sample_info_tfdel, organism == "cer" & genotype == "BAS1delete"),
-                                          .info4 = filter(sample_info_tfdel, organism == "par" & genotype == "BAS1delete"),
-                                          .normalization = "log2"),
-                top = "BAS1")
+TFdel_lookup |> filter(common == "BAS1")
+plotGenesTFdel(.gene_idxs = "YKR099W", .tf = "BAS1", .parents_or_hybrid = "parents")
+
 # Only one TF is in decreasing cluster (SKN7 in Scer, and even that is pretty barely decreasing)
 finaldf |> filter(gene_name %in% TFdel_lookup$systematic & experiment == "LowN") |> 
   left_join(TFdel_lookup, by = c("gene_name"="systematic")) |> 
@@ -130,11 +741,12 @@ finaldf |>
 # GCN4 is only one that's expressed high enough in either species to see a dynamics divergence
 # (it's a very highly expressed TF)
 # But it's very conserved in LowN
+# Plus it had that WT expression replicate
 
-# Conclusion: really no notable dynamics divergence in LowN
+# Conclusion: no notable dynamics divergence in LowN
 # GCN4 spiking up in Spar in LowPi is only notable dynamic divergence
 
-# TODO: is TF differential expression related to number
+# Is TF differential expression related to number
 # of DE genes in each deletion?
 plotdf <- TFdf |> 
   filter(experiment == "LowN") |> 
@@ -156,53 +768,197 @@ ggplot(plotdf, aes(x = effect_size_species,
 # But the reverse isn't true---plenty of Spar effects in TFs higher expressed in Scer. 
 # Hybrid tends to have more similar effects to Spar than Scer, but it depends on TF
 
+#### How many genes does each TFdel affect in each species? ####
+# tables/heatmaps for TP1 and TP3 of counts of how many genes are affected by each TFdel (either direction) in each species and hybrid alleles
+
+
+
+effectsdf <- TFdeldf |> 
+  filter(timepoint != "TP2" &
+           deletion %in% goodTFs) |> 
+  group_by(deletion, organism, timepoint) |> 
+  summarise(nGenes = sum(abs(lfc) > eff_thresh & 
+                           padj < p_thresh)) |> 
+  pivot_wider(id_cols = c("deletion"), 
+              names_from = c("organism", "timepoint"), 
+              values_from = "nGenes") |> 
+  ungroup()
+effects_mat <- select(effectsdf, -deletion) |> as.matrix()
+rownames(effects_mat) <- effectsdf$deletion
+
+# # In case you're curious if there's a relationship to differential expression of TFs between species (there isn't):
+# # ordering by expression difference (lfc) of TFs between species
+# tf_order <- TFdf |> filter(common %in% goodTFs & experiment == "LowN") |> 
+#   arrange(desc(effect_size_species)) |> select(common) |> pull()
+# tf_order <- c(tf_order, setdiff(goodTFs, tf_order))
+# # or mean expression level (also not related):
+# getMeanExpr <- function(.gene_idx) {
+#   return(mean(counts[.gene_idx,]))
+# }
+# tf_order <-  TFdf |> filter(common %in% setdiff(goodTFs, "HAP1")) |> 
+#   select(common, gene_name) |> unique()
+# 
+# tf_order$mean_expr <- map(tf_order$gene_name, getMeanExpr) |> 
+#   unlist() 
+# tf_order <- arrange(tf_order, desc(mean_expr)) |> select(common) |> pull()
+# tf_order <- c(tf_order, "HAP1")
+col_fun <- colorRamp2(c(0, 50, 300), c("blue", "yellow", "red"))
+p <- Heatmap(effects_mat, col = col_fun, na_col = "grey80",
+             column_order = c("cer_TP1", "par_TP1", "cer_TP3", "par_TP3", 
+                              "hyc_TP1", "hyp_TP1", "hyc_TP3", "hyp_TP3"),
+             # row_order = tf_order,
+             cell_fun = function(j, i, x, y, width, height, fill) {
+               output <- if_else(!(is.na(effects_mat[i, j])), 
+                                 true = as.character(effects_mat[i, j]), 
+                                 false = "-")
+               grid.text(output, x, y, gp = gpar(fontsize = 10))
+             })
+
+pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/TFdel_heatmap.pdf", 
+    width = 5, height = 8)
+p
+dev.off()
+
+# # version including TP2
+# pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/TFdel_heatmap_all3tps.pdf", 
+#     width = 5, height = 8)
+# Heatmap(effects_mat, col = col_fun, na_col = "grey80",
+#         column_order = c("cer_TP1", "par_TP1", "cer_TP2", "par_TP2", "cer_TP3", "par_TP3", 
+#                          "hyc_TP1", "hyp_TP1", "hyc_TP2", "hyp_TP2", "hyc_TP3", "hyp_TP3"),
+#         # row_order = tf_order,
+#         cell_fun = function(j, i, x, y, width, height, fill) {
+#           output <- if_else(!(is.na(effects_mat[i, j])), 
+#                             true = as.character(effects_mat[i, j]), 
+#                             false = "-")
+#           grid.text(output, x, y, gp = gpar(fontsize = 10))
+#         })
+# dev.off()
+
+### Repeating with sham, all TFdels were 2 randomly sampled WT replicates
+effectsdf <- TFdeldf_sham1 |> # change to sham2 to see if random sampling matters
+  filter(timepoint != "TP2" &
+           deletion %in% goodTFs) |> 
+  group_by(deletion, organism, timepoint) |> 
+  summarise(nGenes = sum(abs(lfc) > eff_thresh & 
+                           padj < p_thresh)) |> 
+  pivot_wider(id_cols = c("deletion"), 
+              names_from = c("organism", "timepoint"), 
+              values_from = "nGenes") |> 
+  ungroup()
+effects_mat <- select(effectsdf, -deletion) |> as.matrix()
+rownames(effects_mat) <- effectsdf$deletion
+
+col_fun <- colorRamp2(c(0, 50, 300), c("blue", "yellow", "red"))
+p <- Heatmap(effects_mat, col = col_fun, na_col = "grey80",
+             column_order = c("cer_TP1", "par_TP1", "cer_TP3", "par_TP3", 
+                              "hyc_TP1", "hyp_TP1", "hyc_TP3", "hyp_TP3"),
+             # row_order = tf_order,
+             cell_fun = function(j, i, x, y, width, height, fill) {
+               output <- if_else(!(is.na(effects_mat[i, j])), 
+                                 true = as.character(effects_mat[i, j]), 
+                                 false = "-")
+               grid.text(output, x, y, gp = gpar(fontsize = 10))
+             })
+p
+
+# Looking at specific examples
+# verifying numbers of replicates
+TFdel_lookup |> filter(common == "YAP1")
+plotGenesTFdel(.gene_idxs = "YML007W", .tf = "YAP1", .parents_or_hybrid = "parents")
+plotGenesTFdel(.gene_idxs = "YML007W", .tf = "YAP1", .parents_or_hybrid = "hybrid")
+TFdel_lookup |> filter(common == "DAL80")
+plotGenesTFdel(.gene_idxs = "YKR034W", .tf = "DAL80", .parents_or_hybrid = "parents")
+plotGenesTFdel(.gene_idxs = "YKR034W", .tf = "DAL80", .parents_or_hybrid = "hybrid")
+TFdel_lookup |> filter(common == "HAP3")
+plotGenesTFdel(.gene_idxs = "YBL021C", .tf = "HAP3", .parents_or_hybrid = "parents")
+plotGenesTFdel(.gene_idxs = "YBL021C", .tf = "HAP3", .parents_or_hybrid = "hybrid")
+TFdel_lookup |> filter(common == "HAP5")
+plotGenesTFdel(.gene_idxs = "YOR358W", .tf = "HAP5", .parents_or_hybrid = "parents")
+plotGenesTFdel(.gene_idxs = "YOR358W", .tf = "HAP5", .parents_or_hybrid = "hybrid")
+
+# specific notable divergence examples:
+# PHO4 - so so many in hybrid, very few effects in parents
+# MET28 - TP1 many in Spar, none in Scer, decently many in hyb TP1. Conserved many at TP3 in all 4
+# RPN4 - why so many in hybrid TP3
+# INO4 - so so so many effects in Spar TP3, reflected to some extent in both hybrid alleles
+# AFT1 - many effects in Scer TP1, fewer in Spar, somewhere in the middle in hybrid
+# URE2 - many effects Scer TP3, nearly none in Spar TP3
+# HAP4 - only has effects in Spar parent and hybrid TP1, both alleles
+# YAP1 & GAT1 - only many effects in Scer TP3
+# HAP5 & MBP1 - only affect hyb TP3 (like INO4)
+# A few more have notable effects only at Scer TP3: SOK2, GZF3, NRG1, ARG81, MSN2
+
+#### Volcano plots to compare power bwtn species ####
+# At each TP, compare all 4 species with volcano plots
+# One example where Spar has flat pvals:
+makeVolcanoPlot(.tfdeldf = TFdeldf, .tf = "YAP1", .org = "cer", .timepoint = "TP3")
+makeVolcanoPlot(.tfdeldf = TFdeldf, .tf = "YAP1", .org = "par", .timepoint = "TP3")
+# One example where Scer does:
+makeVolcanoPlot(.tfdeldf = TFdeldf, .tf = "MET28", .org = "cer", .timepoint = "TP1")
+makeVolcanoPlot(.tfdeldf = TFdeldf, .tf = "MET28", .org = "par", .timepoint = "TP1")
+# Example where Spar has a ton of TFdel replicates:
+makeVolcanoPlot(.tfdeldf = TFdeldf, .tf = "HAP5", .org = "cer", .timepoint = "TP1")
+makeVolcanoPlot(.tfdeldf = TFdeldf, .tf = "HAP5", .org = "par", .timepoint = "TP1")
+makeVolcanoPlot(.tfdeldf = TFdeldf, .tf = "HAP5", .org = "cer", .timepoint = "TP3")
+makeVolcanoPlot(.tfdeldf = TFdeldf, .tf = "HAP5", .org = "par", .timepoint = "TP3")
+# Spar has more detected, but Scer does also have a handful of sig (mainly TP3)
+
+# Main difference btwn TFs I can think of is variance between replicates
+TFdel_lookup |> filter(common == "YAP1")
+plotGenesTFdel(.gene_idxs = "YML007W", .tf = "YAP1", .parents_or_hybrid = "parents")
+TFdel_lookup |> filter(common == "MET28")
+plotGenesTFdel(.gene_idxs = "YIR017C", .tf = "MET28", .parents_or_hybrid = "parents")
+TFdel_lookup |> filter(common == "HAP5")
+plotGenesTFdel(.gene_idxs = "YOR358W", .tf = "HAP5", .parents_or_hybrid = "parents")
+# Not seeing much difference in replicate variation between Scer and Spar
+# (Except of course HAP5, but Spar honestly has way more variation b/c of add'l replicates)
+
 #### Does TF deletion affect level or dynamics? ####
 # 3 options for each gene in each species for each TF:
 # 1) not affected by TF deletion --- (no significant lfc/pval at either TP1 or TP3)
 # 2) level affected by TF deletion --- (significant lfc/pval at both TP1 and TP3 in same direction)
 # 3) dynamics affected by TF deletion --- (significant lfc/pval at TP1, or TP3, or both but not in the same direction)
-eff_thresh <- 1
-checkEffect <- function(.lfcs, .pvals) {
-  if (length(.lfcs) != length(.pvals)) {
-    stop("vectors are not the same length\n")
-  }
-  if (length(.lfcs) < 2) {
-    return("single")
-  }
-  if (all(.pvals > p_thresh)) {
-    return("none")
-  }
-  sig_lfcs <- .lfcs[.pvals < p_thresh]
-  if (all(abs(sig_lfcs) < eff_thresh)) {
-    return("none")
-  }
-  if (all(.pvals < p_thresh) & 
-      length(unique(sign(.lfcs))) == 1) {
-    return("level")
-  }
-  else {
-    return("dynamics")
-  }
-}
-# tests for checkEffect
-checkEffect(c(5, 3), c(0.001, 0.0005)) # level
-checkEffect(c(0.5, 3), c(0.001, 0.0005)) # debatable case: one effect size isn't over the eff_thresh, choose level or dynamics
-checkEffect(c(54, -9, 5), c(1, 1, 0.1)) # none, no sig pvalues
-checkEffect(c(54, -9, -0.5), c(1, 1, 0.01)) # none, the sig pvalue doesn't have a large enough effect size
-checkEffect(c(2, -1), c(0.04, 0.01)) # dynamics
 
-effectdf <- TFdeldf |> 
-  # filter(timepoint != "TP2") |> 
-  group_by(deletion, gene_name, organism) |> 
-  summarise(effect = checkEffect(.lfcs = lfc, .pvals = padj)) |> 
-  ungroup()
+# Scatterplots of individual TFdel in one species, TP1 vs TP3
+plotScatterTF <- function(.tf, .org, .df = TFdeldf) {
+  plotdf <- filter(.df, deletion == .tf &
+                     organism == .org &
+                     timepoint != "TP2") |> 
+    pivot_wider(id_cols = c("gene_name", "cer", "par", "hyc", "hyp"), names_from = "timepoint",
+                values_from = c("lfc", "padj")) |> 
+    filter((abs(lfc_TP1) > eff_thresh & padj_TP1 < p_thresh) |
+             (abs(lfc_TP3) > eff_thresh & padj_TP3 < p_thresh))
+  ggplot(plotdf, aes(x = lfc_TP1, y = lfc_TP3)) +
+    geom_point(aes(color = if_else(abs(lfc_TP1) > eff_thresh,
+                                   true = if_else(abs(lfc_TP3) > eff_thresh,
+                                                  true = "both",
+                                                  false = "TP1"),
+                                   false = if_else(abs(lfc_TP3) > eff_thresh,
+                                                   true = "TP3",
+                                                   false = "none")),
+                   shape = as.character(.data[[.org]]))) +
+    geom_abline(slope = 1, intercept = 0) +
+    theme(legend.title = element_blank())
+}
+plotScatterTF(.tf = "STB5", .org = "cer")
+plotScatterTF(.tf = "STB5", .org = "par")
+plotScatterTF(.tf = "INO4", .org = "cer")
+plotScatterTF(.tf = "INO4", .org = "par")
+plotScatterTF(.tf = "GAT1", .org = "cer")
+plotScatterTF(.tf = "GAT1", .org = "par")
+plotScatterTF(.tf = "GLN3", .org = "cer")
+plotScatterTF(.tf = "GLN3", .org = "par")
+plotScatterTF(.tf = "YAP1", .org = "cer")
+plotScatterTF(.tf = "YAP1", .org = "par")
+plotScatterTF(.tf = "HAP4", .org = "cer")
+plotScatterTF(.tf = "HAP4", .org = "par")
 
 # example, ADE17 (YMR120C) has level effect in BAS1, known to be directly positively regulated by Bas1p
-bas1_genes <- effectdf |> filter(deletion == "BAS1" & effect == "level") |> 
+bas1_genes <- effectdf |> filter(deletion == "BAS1" & effect == "level") |>
   select(gene_name) |> pull() |> unique()
-TFdeldf |> filter(deletion == "BAS1" & 
+TFdeldf |> filter(deletion == "BAS1" &
                     gene_name %in% bas1_genes &
-                    timepoint != "TP2") |> 
+                    timepoint != "TP2") |>
   arrange(lfc)
 
 # Note: TFdel samples missing replicates do not have an estimate in DESeq2:
@@ -211,138 +967,537 @@ TFdeldf |> filter(deletion == "SWI4" & organism == "cer" & timepoint == "TP3")
 # such as, SWI4 in Scer:
 effectdf |> filter(deletion == "SWI4" & organism == "cer") |> select(effect) |> table()
 
-effect_tab <- effectdf |> select(deletion, effect) |> table() 
+effect_tab <- effectdf |> select(deletion, effect) |> table()
 effect_tab # more dynamics than level, but plenty of level
 tf_order <- names(sort(rank(-(effect_tab[,"dynamics"] + effect_tab[,"level"]))))
 plotdf <- effectdf |> filter(!(effect %in% c("single", "none")))
 # all TFs
-ggplot(plotdf, 
-       aes(x = deletion)) + 
+ggplot(plotdf,
+       aes(x = deletion)) +
   geom_bar(aes(fill = effect)) +
   scale_x_discrete(breaks = tf_order, limits = tf_order) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
   facet_wrap(~organism)
-# Up Scer TFs
-ggplot(filter(plotdf, deletion %in% Up_TFs_Scer_LowN), 
-       aes(x = deletion)) + 
-  geom_bar(aes(fill = effect)) +
-  scale_x_discrete(breaks = tf_order, limits = tf_order[tf_order %in% Up_TFs_Scer_LowN]) +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
-  facet_wrap(~organism) 
-# Up Spar TFs
-ggplot(filter(plotdf, deletion %in% Up_TFs_Spar_LowN), 
-       aes(x = deletion)) + 
-  geom_bar(aes(fill = effect)) +
-  scale_x_discrete(breaks = tf_order, limits = tf_order[tf_order %in% Up_TFs_Spar_LowN]) +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
-  facet_wrap(~organism) # A weird looking plot, mainly b/c PHO4 and HAP2 have a ton of hybrid effects
 
-# does shuffling lfcs create same level/dynamic distribution?
-shuffleLFCs <- function(.df, .preserve_groups = NULL) {
-  if (!is.null(.preserve_groups)) {
-    griddf <- .df |> 
-      select(.preserve_groups) |> 
-      unique()
-    vars <- colnames(griddf)
-    outdf <- map(c(1:nrow(griddf)), \(i) {
-      df_group <- .df
-      for (var in vars) {
-        df_group <- filter(df_group, 
-                           .data[[var]] == pull(griddf[i, which(vars == var)]))
-      }
-      shuffle_idx <- c(1:nrow(df_group)) |> 
-        sample(size = nrow(df_group), replace = FALSE)
-      df_group$pval <- df_group$pval[shuffle_idx]
-      df_group$padj <- df_group$padj[shuffle_idx]
-      df_group$lfc <- df_group$lfc[shuffle_idx]
-      return(df_group)
-  }) |> purrr::reduce(bind_rows)
-  return(outdf)
+#### Genes with conserved expression dynamics are more highly connected ####
+
+# DESeq2 quants
+ntfdf <- TFdeldf |> mutate(sig = padj < p_thresh) |>
+  group_by(gene_name, organism, timepoint, dynamics) |> 
+  summarise(n_tfs = sum(sig)) |> ungroup()
+ntf_cutoff <- 5 # number of TFdels that need to cause differential expression for a gene to be considered "highly connected"
+# At higher connectivity levels, there are more conserved than diverged TF effects
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/TFdel/histogram.pdf",
+    width = 4, height = 3)
+ggplot(ntfdf, aes(x = n_tfs)) +
+  geom_histogram(aes(fill = dynamics,
+                     y = after_stat(density)),
+                 bins = 46, binwidth = 1, position = "identity",
+                 alpha = 0.8) +
+  #geom_vline(xintercept = ntf_cutoff - 0.5) +
+  scale_fill_discrete(type = c(levdyn_colordf$type[levdyn_colordf$limits == "conserved level and dynamics"],
+                               levdyn_colordf$type[levdyn_colordf$limits == "conserved level, diverged dynamics"]),
+                      limits = c("conserved", "diverged")) +
+  theme_classic() +
+  xlab("number of TF deletions affecting gene") +
+  ylab("% genes") + 
+  theme(legend.position = "bottom")
+dev.off()
+
+# SMD nEffects
+load("data_files/QC_TFdel.RData")
+rm(TFdeldfs_pois, TFdeldfs_negbin, SMDs)
+ntfdf <- SMDdf |> mutate(sig = 1 - pnorm(abs(smd)) < p_thresh) |>
+  filter(organism %in% c("cer", "par")) |> 
+  left_join(filter(finaldf, experiment == "LowN"),
+            by = "gene_name") |> 
+  drop_na() |> 
+  group_by(gene_name, organism, timepoint, dynamics) |> 
+  summarise(n_tfs = sum(sig, na.rm = TRUE)) |> ungroup()
+# At higher connectivity levels, there are more conserved than diverged TF effects
+pdf(file = "../../aligning_the_molecular_phenotype/paper_figures/Supplement/tf_connections_histogram_SMD.pdf",
+    width = 4, height = 3)
+ggplot(ntfdf, aes(x = n_tfs)) +
+  geom_histogram(aes(fill = dynamics,
+                     y = after_stat(density)),
+                 bins = 46, binwidth = 1, position = "identity",
+                 alpha = 0.8) +
+  # geom_vline(xintercept = ntf_cutoff - 0.5) +
+  scale_fill_discrete(type = c(levdyn_colordf$type[levdyn_colordf$limits == "conserved level and dynamics"],
+                               levdyn_colordf$type[levdyn_colordf$limits == "conserved level, diverged dynamics"]),
+                      limits = c("conserved", "diverged")) +
+  theme_classic() +
+  xlab("number of TF deletions affecting gene") +
+  ylab("% genes") + 
+  theme(legend.position = "bottom")
+dev.off()
+
+#### Var-reducing tf effects are less common among dynamics-diverging genes ####
+
+vardf |> select(dynamics, isVarReducing) |> table()
+# An even split of var reducing and var increasing effects for conserved dynamics,
+# but over twice as many var increasing effects for diverged dynamics genes
+vardf |> select(dynamics, isVarReducing) |> table() |> fisher.test()
+
+# dynamics-divergers are less likely to have conserved effects btwn species:
+TFdeldf |> select(gene_name, deletion, tf_effect_conserved, dynamics) |> 
+  unique() |> 
+  select(tf_effect_conserved, dynamics) |> table()
+
+# repeating for hybrid
+consdf_hyb <- TFdeldf |> filter(organism %in% c("hyc", "hyp") &
+                              timepoint != "TP2" &
+                              padj < p_thresh) |> 
+  group_by(timepoint, deletion, gene_name) |> 
+  summarise(tf_effect_conserved_hybrid = if_else(length(lfc) > 1,
+                                                 true = all(padj < p_thresh) & 
+                                                   length(unique(sign(lfc))) == 1,
+                                                 false = FALSE))
+
+TFdeldf <- left_join(TFdeldf, consdf_hyb,
+                     by = c("timepoint", "deletion", "gene_name"),
+                     relationship = "many-to-one")
+
+#### Exploring example TF response groups between species ####
+getGeneGroup <- function(.tf, .tp, .lfc_sign, .clust, .org, .df = TFdeldf) {
+  gene_idxs <- .df |> filter(deletion == .tf &
+                               organism == .org &
+                               sign(lfc) == .lfc_sign &
+                               timepoint == .tp &
+                               #.data[[.org]] == .org &
+                               padj < p_thresh) |> 
+    select(gene_name) |> pull()
+  if (.org %in% c("cer", "hyc")) {
+    out_idxs <- finaldf |> filter(gene_name %in% gene_idxs &
+                                    experiment == "LowN" &
+                                    cer == .clust) |>
+      select(gene_name) |> pull()
   }
-  else {
-    outdf <- .df
-    shuffle_idx <- c(1:nrow(outdf)) |> 
-      sample(size = nrow(outdf), replace = FALSE)
-    outdf$pval <- outdf$pval[shuffle_idx]
-    outdf$padj <- outdf$padj[shuffle_idx]
-    outdf$lfc <- outdf$lfc[shuffle_idx]
-    return(outdf)
+  if (.org %in% c("par", "hyp")) {
+    out_idxs <- finaldf |> filter(gene_name %in% gene_idxs &
+                                    experiment == "LowN" &
+                                    par == .clust) |>
+      select(gene_name) |> pull()
   }
+  return(out_idxs)
 }
-# # tests for shuffleLFCs
-# testdf <- TFdeldf |> 
-#   filter(organism %in% c("cer", "par") &
-#            deletion %in% c("TEC1", "INO4")) |> 
-#   slice_sample(n = 100000)
-# testdf |> filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
-#   select(organism, deletion) |> table() # purposefully choosing very asymetrical tfs
-# # no group preservation
-# shuffleLFCs(testdf) |> filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
-#   select(organism, deletion) |> table() # even spread on both axes
-# # just preserve nEffects per TF:
-# shuffleLFCs(testdf, .preserve_groups = "deletion") |>
-#   filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
-#   select(organism, deletion) |> table()
-# # just preserve nEffects per organism
-# shuffleLFCs(testdf, .preserve_groups = "organism") |>
-#   filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
-#   select(organism, deletion) |> table()
-# # preserve nEffects per organism per deletion (should be the same counts as unshuffled)
-# shuffleLFCs(testdf, .preserve_groups = c("deletion", "organism")) |>
-#   filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
-#   select(organism, deletion) |> table()
 
-# plotting shuffle with full data
-shuffledf <- TFdeldf |> 
-  shuffleLFCs(.preserve_groups = c("deletion", "organism")) |> 
-  group_by(deletion, gene_name, organism) |> 
-  summarise(effect = checkEffect(.lfcs = lfc, .pvals = padj)) |> 
-  ungroup() |> 
-  filter(!(effect %in% c("none", "single")))
-ggplot(shuffledf, 
-       aes(x = deletion)) + 
-  geom_bar(aes(fill = effect)) +
-  scale_x_discrete(breaks = tf_order, limits = tf_order) +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
-  facet_wrap(~organism) 
-# Level effects basically go away. True whether you preserve same nEffects per organism or not
+getGroupDf <- function(.tf, .tp, .lfc_sign, .clust, .genes_cer, .genes_par, .df = TFdeldf) {
+  gdf <- .df |> filter(gene_name %in% unique(c(.genes_cer, .genes_par)) &
+                         deletion == .tf & timepoint == .tp &
+                         organism %in% c("cer", "par")) |> 
+    pivot_wider(id_cols = c("gene_name", "deletion", "timepoint"),
+                names_from = "organism", values_from = c("lfc", "padj"))
+  gdf$tf_effect <- if_else(gdf$padj_cer < p_thresh & gdf$padj_par < p_thresh,
+                           true = if_else(sign(gdf$lfc_cer) == sign(gdf$lfc_par),
+                                          true = "conserved",
+                                          false = "opposite direction"),
+                           false = if_else(gdf$padj_cer < p_thresh,
+                                           true = "Scer only",
+                                           false = if_else(gdf$padj_par < p_thresh,
+                                                           true = "Spar only",
+                                                           false = "no effect")))
+  gdf <- left_join(gdf, filter(finaldf, experiment == "LowN"),
+                   by = "gene_name") |> 
+    filter(level != "biased")
+  gdf$lfc_sign <- .lfc_sign
+  gdf$clust <- .clust
+  return(gdf)
+}
+griddf <- expand_grid(tf = goodTFs,
+                      clust = c(0, 1, 2),
+                      lfc_sign = c(1, -1),
+                      tp = c("TP1", "TP3"))
+test <- slice_sample(griddf, n = 1)
+test
+test_tf <- test$tf
+test_tp <- test$tp
+test_clust = test$clust
+test_sign = test$lfc_sign
+genes_cer <- getGeneGroup(.tf = test_tf, .tp = test_tp, .org = "cer",
+                          .clust = test_clust, .lfc_sign = test_sign)
+genes_par <- getGeneGroup(.tf = test_tf, .tp = test_tp, .org = "par",
+                          .clust = test_clust, .lfc_sign = test_sign)
+plotdf <- getGroupDf(.tf = test_tf, .tp = test_tp, 
+                     .clust = test_clust, .lfc_sign = test_sign,
+                     .genes_cer = genes_cer,
+                     .genes_par = genes_par)
+ggplot(plotdf, aes(x = lfc_cer, y = lfc_par)) + 
+  geom_point(aes(color = tf_effect)) +
+  geom_abline(slope = 1, intercept = 0) # padj needs to be significant for both species to see a conserved effect
+# are conserved or diverged TF responses related to conserved or diverged dynamics?
+# TF response is Scer-unique vs both species 
+cer_tab <- plotdf |> filter(tf_effect %in% c("conserved", "Scer only")) |> 
+  select(tf_effect, dynamics) |> table()
+cer_tab
+fisher.test(cer_tab)
+# TF response is Spar-unique vs both species 
+par_tab <- plotdf |> filter(tf_effect %in% c("conserved", "Spar only")) |> 
+  select(tf_effect, dynamics) |> table()
+par_tab
+fisher.test(par_tab)
+# Do conserved vs non-conserved groups really look that different between species?
+# conserved TF response
+gene_idxs <- plotdf |> filter(tf_effect == "conserved" & dynamics == "conserved") |> 
+  select(gene_name) |> pull()
+plotGenesTFdel(.tf = test_tf, .gene_idxs = gene_idxs)
+gene_idxs <- plotdf |> filter(tf_effect == "conserved" & dynamics == "diverged") |> 
+  select(gene_name) |> pull()
+plotGenesTFdel(.tf = test_tf, .gene_idxs = gene_idxs)
+# if there are ~ < 30 genes:
+# plotGenesTFdel(.tf = test_tf, .gene_idxs = gene_idxs, .single_genes = TRUE)
+# Scer only
+gene_idxs <- plotdf |> filter(tf_effect == "Scer only" & dynamics == "conserved") |> 
+  select(gene_name) |> pull()
+plotGenesTFdel(.tf = test_tf, .gene_idxs = gene_idxs)
+gene_idxs <- plotdf |> filter(tf_effect == "Scer only" & dynamics == "diverged") |> 
+  select(gene_name) |> pull()
+plotGenesTFdel(.tf = test_tf, .gene_idxs = gene_idxs)
+# if there are ~ < 30 genes:
+# plotGenesTFdel(.tf = test_tf, .gene_idxs = gene_idxs, .single_genes = TRUE)
+# Spar only
+gene_idxs <- plotdf |> filter(tf_effect == "Spar only" & dynamics == "conserved") |> 
+  select(gene_name) |> pull()
+plotGenesTFdel(.tf = test_tf, .gene_idxs = gene_idxs)
+gene_idxs <- plotdf |> filter(tf_effect == "Spar only" & dynamics == "diverged") |> 
+  select(gene_name) |> pull()
+plotGenesTFdel(.tf = test_tf, .gene_idxs = gene_idxs)
+# if there are ~ < 30 genes:
+# plotGenesTFdel(.tf = test_tf, .gene_idxs = gene_idxs, .single_genes = TRUE)
+# Conclusions: for the most part, the diverged genes do tend to have a more divergent effect btwn species
+# Weirdly there's only a bias towards conserved dynamics among the genes with diverged tf responses
+# Does this hold up among other groups?
 
-# Conclusion: way more dynamics than level, but level divergers are more than expected by chance
-# Amount of level divergers looks more steady per tf
-# is that because it's the same genes that have level effects in many TFs?
+### Exact tests for conserved dynamics enrichment among each gene group
+groupdf <- map(c(1:nrow(griddf)), \(i) {
+  cat(i, "/", nrow(griddf), "\n")
+  genes_cer <- getGeneGroup(.tf = griddf$tf[i], .tp = griddf$tp[i], 
+                            .org = "cer", .clust = griddf$clust[i], 
+                            .lfc_sign = griddf$lfc_sign[i])
+  genes_par <- getGeneGroup(.tf = griddf$tf[i], .tp = griddf$tp[i], 
+                            .org = "par", .clust = griddf$clust[i], 
+                            .lfc_sign = griddf$lfc_sign[i])
+  if (length(genes_cer) > 0 | length(genes_par) > 0) {
+    outdf <- getGroupDf(.tf = griddf$tf[i], .tp = griddf$tp[i],
+                        .clust = griddf$clust[i], .lfc_sign = griddf$lfc_sign[i],
+                        .genes_cer = genes_cer, .genes_par = genes_par) |> 
+      group_by(tf_effect, deletion, timepoint, lfc_sign, clust) |> 
+      summarise(nDynamicsDiverged = sum(dynamics == "diverged"),
+                nDynamicsConserved = sum(dynamics == "conserved")) |> 
+      ungroup()
+    return(outdf)
+    # tf_dyn_table <- plotdf |> mutate(tf_effect2 = if_else(tf_effect == "conserved",
+    #                                                       true = "conserved",
+    #                                                       false = "single species")) |> 
+    #   select(dynamics, tf_effect2) |> table()
+    # if (length(dim(tf_dyn_table)) == 2) {
+    #   if (dim(tf_dyn_table)[1] == 2 &
+    #       dim(tf_dyn_table)[2] == 2) {
+    #     tf_dyn_test <- fisher.test(tf_dyn_table)
+    #   }
+    #   else {
+    #     tf_dyn_test <- data.frame(p.value = NA)
+    #   }
+    # }
+    # else {
+    #   tf_dyn_test <- data.frame(p.value = NA)
+    # }
+    # return(tibble(tf = griddf$tf[i],
+    #               tp = griddf$tp[i],
+    #               clust = griddf$clust[i],
+    #               lfc_sign = griddf$lfc_sign[i],
+    #               nCer = length(genes_cer),
+    #               nPar = length(genes_par),
+    #               nIntersect = length(intersect(genes_cer, genes_par)),
+    #               pct_consDyn_Scer = pct_consDyn_Scer,
+    #               pct_consDyn_Spar = pct_consDyn_Spar,
+    #               pct_consDyn_cons = pct_consDyn_cons,
+    #               fisher_pval = tf_dyn_test$p.value))
+  }
+  # else {
+  #   return(tibble(tf = griddf$tf[i],
+  #                 tp = griddf$tp[i],
+  #                 clust = griddf$clust[i],
+  #                 lfc_sign = griddf$lfc_sign[i],
+  #                 nCer = NA,
+  #                 nPar = NA,
+  #                 nIntersect = NA,
+  #                 pct_consDyn_Scer = NA,
+  #                 pct_consDyn_Spar = NA,
+  #                 pct_consDyn_cons = NA,
+  #                 fisher_pval = NA))
+  # }
+}) |> purrr::reduce(.f = bind_rows) |> drop_na()
 
-# UpSet only allows sets up to 31, so only including top 31 TFs with the most effects
-makeTFsUpset(.org = "par", .effect = "level", # change to different organisms
-             .tfs = tf_order[1:31]) 
-# HAP2 has the most shared effects in Scer, shared with GLN3, HAP3, HAP5, GCR2, RTG3:
-makeTFsUpset(.org = "cer", .effect = "level", 
-             .tfs = c("GLN3", "HAP2", "HAP3", "HAP5", "GCR2", "RTG3"))
-makeTFsUpset(.org = "par", .effect = "level",
-             .tfs = c("GLN3", "HAP2", "HAP3", "HAP5", "GCR2", "RTG3")) # even more true in Spar
-# Not really seen to the same extent in dynamics:
-makeTFsUpset(.org = "cer", .effect = "dynamics",
-             .tfs = c("GLN3", "HAP2", "HAP3", "HAP5", "GCR2", "RTG3"))
-makeTFsUpset(.org = "par", .effect = "dynamics", 
-             .tfs = c("GLN3", "HAP2", "HAP3", "HAP5", "GCR2", "RTG3")) # even more true in Spar
-# What are those 23 genes in Spar that all respond to HAP2-3-5 deletions with level change?
-effectdf |> filter(deletion %in% c("HAP2", "HAP3", "HAP5") & 
-                     organism == "par" & 
-                     effect == "level") |> select(gene_name) |> 
-  table() |> sort(decreasing = TRUE)
-# ATP synthetase components: ATP1, ATP3, ATP16, ATP5, ATP17
-# other mitochondiral inner membrane respiratory genes: PET9, MIC10, COX9
-# Makes sense, HAP2/3/4/5 is a complex that activates respiratory gene expression
+groupdf$isVarReducing <- map(c(1:nrow(groupdf)), \(i) {
+  checkVarReducing(.tp = groupdf$timepoint[i],
+                   .clust = groupdf$clust[i],
+                   .lfc_sign = groupdf$lfc_sign[i])
+}) |> unlist()
+# We don't see an effect of conserved vs diverged tf response when you don't pair
+# the species-specific and conserved counts for the same tf response:
+filter(groupdf) |> group_by(tf_effect) |> 
+  summarise(nDynCons_lessThanHalf = sum(nDynamicsDiverged > nDynamicsConserved),
+            n = n()) |> 
+  mutate(pct_DynCons_lessThanHalf = nDynCons_lessThanHalf/n)
 
-# conclusion: except for the HAP complex, different TFdels cause different sets of genes to change level
+plotdf <- groupdf |> filter(tf_effect != "opposite direction") |> 
+  mutate(nGenes = nDynamicsConserved + nDynamicsDiverged) |> 
+  mutate(pct_consDyn = nDynamicsConserved/nGenes)
+ggplot(plotdf, aes(x = pct_consDyn)) +
+  geom_density(aes(fill = tf_effect), alpha = 0.5)
+plotdf |> group_by(tf_effect) |> 
+  summarise(max_nGenes = max(nGenes),
+            min_nGenes = min(nGenes),
+            mean_nGenes = mean(nGenes))
+plotdf |> group_by(tf_effect) |>
+  filter(nGenes > 5) |> 
+  summarise(max_nGenes = max(nGenes),
+            min_nGenes = min(nGenes),
+            mean_nGenes = mean(nGenes)) # means look equal now
+plotdf <- plotdf |> group_by(tf_effect) |>
+  filter(nGenes > 5)
+ggplot(plotdf, aes(x = pct_consDyn)) +
+  geom_density(aes(fill = tf_effect), alpha = 0.5)
 
-#### Dynamics Example: URE2 represses GAT1 and GLN3 ####
-makeTFsUpset(.org = "cer", .effect = "level", 
-             .tfs = c("GLN3", "GAT1", "URE2")) # no shared level effects
-makeTFsUpset(.org = "cer", .effect = "dynamics", 
-             .tfs = c("GLN3", "GAT1", "URE2")) # a decent number of shared dynamics effects
-makeTFsUpset(.org = "cer", .effect = "dynamics",
-             .df = shuffledf, .tfs = c("GLN3", "GAT1", "URE2")) # more than seen by chance
-# also true in par, hyc, hyp, but GAT1 and URE2 just have way fewer single effects and GLN3 has way more
+# Scer
+plotdf <- groupdf |> filter(tf_effect %in% c("conserved", "Scer only")) |> 
+  mutate(nGenes = nDynamicsConserved + nDynamicsDiverged) |> 
+  filter(nGenes > 5) |> 
+  mutate(pct_consDyn = nDynamicsConserved/nGenes) |> 
+  pivot_wider(id_cols = c("deletion", "timepoint", "clust", "lfc_sign", "isVarReducing"),
+              names_from = "tf_effect", values_from = "pct_consDyn") |> 
+  rename(c("pct_consDyn_ScerOnly"="Scer only",
+           "pct_consDyn_conserved"="conserved"))
+ggplot(plotdf, aes(x = pct_consDyn_ScerOnly, pct_consDyn_conserved)) +
+  geom_point(aes(color = isVarReducing)) +
+  xlim(c(0, 1)) +
+  ylim(c(0, 1))
+# Spar
+plotdf <- groupdf |> filter(tf_effect %in% c("conserved", "Spar only")) |> 
+  mutate(nGenes = nDynamicsConserved + nDynamicsDiverged) |> 
+  filter(nGenes > 5) |> 
+  mutate(pct_consDyn = nDynamicsConserved/nGenes) |> 
+  pivot_wider(id_cols = c("deletion", "timepoint", "clust", "lfc_sign", "isVarReducing"),
+              names_from = "tf_effect", values_from = "pct_consDyn") |> 
+  rename(c("pct_consDyn_SparOnly"="Spar only",
+           "pct_consDyn_conserved"="conserved"))
+ggplot(plotdf, aes(x = pct_consDyn_SparOnly, pct_consDyn_conserved)) +
+  geom_point(aes(color = isVarReducing)) +
+  xlim(c(0, 1)) +
+  ylim(c(0, 1))
+
+# conclusions: 1) for both species specific and conserved tf effects,
+#              var-increasing tf effects are less common among dynamics-diverging genes.
+#              dynamics-diverging genes already have lower variance than conserved, 
+#              so it's surprising they can't be perturbed to vary more
+#              ('nowhere to go but up' paradigm does not seem to be at play)
+#              instead 
+
+#              2) species specific tf effects always have a scarcity of dynamics-diverging genes
+#
+#              3) conserved tf effects that are var-reducing have a scarcity of dynamics-diverging genes
+#              Var-increasing conserved tf effects have an even distribution of pct conserved dynamics
+
+# TODO: check if the first conclusion, var-increasing tf effects are less common among dynamics-diverging genes,
+# can be seen without grouping by tf effect, i.e. at the single gene level. Do dynamics divergers
+# just never increase variation upon TF deletion? This wouldn't have seemed interesting when
+# nothing appeared to increase variation. But now we've found variation-increasing tf effects,
+# it's interesting that there's just none in those genes
+# TODO: then try to tie in the species-specific effect result in a more interpretable way than
+# the conclusions I just wrote up there ^ because the phrase "Var-increasing conserved tf effects" is insane
+
+plotdf <- filter(groupdf, n > 10)
+ggplot(plotdf, aes(x = pct_consDyn_biggerSpecies, y = pct_consDyn_cons)) +
+  geom_point(aes(color = tf)) +
+  ylim(c(0, 1)) +
+  xlim(c(0, 1))
+# There is a lack of genes that have diverged in dynamics among genes with species-specific
+# TFdel responses
+# TODO: why didn't this show up in the exact test I did in the does anything predict
+# whether TF effects will be conserved between species exact test? That actually showed the opposite,
+# that diverged TF responses had an enrichment in dynamics-diverged genes
+sum(plotdf$pct_consDyn_biggerSpecies > 0.5, na.rm = TRUE)
+sum(plotdf$pct_consDyn_biggerSpecies <=  0.5, na.rm = TRUE)
+sum(plotdf$pct_consDyn_cons > 0.5, na.rm = TRUE)
+sum(plotdf$pct_consDyn_cons <=  0.5, na.rm = TRUE)
+fisher.test(matrix(c(138, 26, 96, 69), nrow = 2))
+# couple things I can think of: 
+# 1) didn't filter for tf groups that affected at least 10 genes
+# 2) summarizing each set of genes here as 1 value, collapses the effect of specific
+# tfs that affect a lot of genes (like CBF1)
+# example: STB5 TP3 had 447/(447+1155) diverged dynamics genes among the diverged TF effect,
+#          which is higher than among the conserved TF effect: 65/(65+258)
+#          But the previous plot has the majority of pct_consDyn_cons values lower than pct_consDyn of either species:
+plotdf |> filter(tf == "STB5" & tp == "TP3") 
+# the only observation where the conserved dynamics is higher for conserved TF effect than for diverged TF effect
+# does indeed happen to be the most massive gene group (TP3 clust 1, lfc < 0)
+# TODO: also make sure this doesn't have to do with the cons tf effect group being smaller
+#       plot nDynamicDiverged vs nDynamicsConserved coloring points for cons TF or diverged TF effect
+
+### Why are some very divergent TF responses only seen in conserved genes
+# TODO: follow certain examples like the DALs to see why grouping by TF reveals
+# A lack of dynamics diverged genes specifically among the TF effect diverged genes
+# Seems to appear for certain tf effects and not others
+
+#### Gene Group Heatmaps ####
+col_fun <- colorRamp2(c(0, 10, 30, 100), c("blue", "yellow", "red", "magenta"))
+gene_group_order <- c("1_1_TPX_-1_cer", "1_1_TPX_-1_par", "1_1_TPX_1_cer", "1_1_TPX_1_par",
+                      "2_2_TPX_-1_cer", "2_2_TPX_-1_par", "2_2_TPX_1_cer", "2_2_TPX_1_par",
+                      "0_0_TPX_-1_cer", "0_0_TPX_-1_par", "0_0_TPX_1_cer", "0_0_TPX_1_par",
+                      "0_1_TPX_-1_cer", "0_1_TPX_-1_par", "0_1_TPX_1_cer", "0_1_TPX_1_par",
+                      "1_0_TPX_-1_cer", "1_0_TPX_-1_par", "1_0_TPX_1_cer", "1_0_TPX_1_par",
+                      "0_2_TPX_-1_cer", "0_2_TPX_-1_par", "0_2_TPX_1_cer", "0_2_TPX_1_par",
+                      "2_0_TPX_-1_cer", "2_0_TPX_-1_par", "2_0_TPX_1_cer", "2_0_TPX_1_par",
+                      "1_2_TPX_-1_cer", "1_2_TPX_-1_par", "1_2_TPX_1_cer", "1_2_TPX_1_par",
+                      "2_1_TPX_-1_cer", "2_1_TPX_-1_par", "2_1_TPX_1_cer", "2_1_TPX_1_par")
+
+makeGeneGroupHeatmapOld <- function(.parents_or_hybrid = "parents",
+                                 .row_order = tf_order, .col_order = gene_group_order,
+                                 .conserved, .timepoint, .df = TFdeldf) {
+  if (.parents_or_hybrid == "parents") {
+    orgs <- c("cer", "par")
+    if (.conserved) {
+      .df$correct_tf_effect <- .df$tf_effect_conserved
+    }
+    if (!.conserved) {
+      .df$correct_tf_effect <- !(.df$tf_effect_conserved)
+    }
+  }
+  if (.parents_or_hybrid == "hybrid") {
+    orgs <- c("hyc", "hyp")
+    if (.conserved) {
+      .df$correct_tf_effect <- .df$tf_effect_conserved_hybrid
+    }
+    if (!.conserved) {
+      .df$correct_tf_effect <- !(.df$tf_effect_conserved_hybrid)
+    }
+    .col_order <- gsub(pattern = "cer", replacement = "hyc", .col_order) |>
+      gsub(pattern = "par", replacement = "hyp")
+  }
+  .col_order <- gsub(pattern = "TPX", replacement = .timepoint, .col_order)
+  effectsdf <- .df |> filter(timepoint == .timepoint &
+                               organism %in% orgs &
+                               deletion %in% .row_order) |> 
+    mutate(lfc_sign = sign(lfc)) |> 
+    group_by(deletion, organism, timepoint, cer, par, lfc_sign) |> 
+    summarise(nGenes = sum(padj < p_thresh & correct_tf_effect)) |> 
+    pivot_wider(id_cols = c("deletion"), 
+                names_from = c("cer", "par", "timepoint", "lfc_sign", "organism"), 
+                values_from = "nGenes") |> 
+    ungroup()
+  effects_mat <- select(effectsdf, -deletion) |> as.matrix()
+  rownames(effects_mat) <- effectsdf$deletion
+  effects_mat[is.na(effects_mat)] <- 0 # NAs are categories that disappeared when using summarise/group_by (I've looked into options to preserve them, but it's not implemented)
+  
+  print(Heatmap(effects_mat, col = col_fun, na_col = "grey80",
+                column_order = .col_order,
+                row_order = .row_order,
+                cell_fun = function(j, i, x, y, width, height, fill) {
+                  output <- if_else(!(is.na(effects_mat[i, j])), 
+                                    true = as.character(effects_mat[i, j]), 
+                                    false = "-")
+                  grid.text(output, x, y, gp = gpar(fontsize = 10))
+                }))
+}
+# parents
+# conserved TF effects TP1
+makeGeneGroupHeatmapOld(.conserved = TRUE, .timepoint = "TP1")
+# conserved TF effects TP3
+p_cons_TP3 <- makeGeneGroupHeatmap(.conserved = TRUE, .timepoint = "TP3")
+# diverged TF effects TP1
+p_div_TP1 <- makeGeneGroupHeatmap(.conserved = FALSE, .timepoint = "TP1")
+# diverged TF effects TP3
+p_div_TP3 <- makeGeneGroupHeatmap(.conserved = FALSE, .timepoint = "TP3")
+
+pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/TFeffectGeneGroupHeatmaps.pdf",
+    width = 12, height = 7)
+print(p_cons_TP1)
+print(p_cons_TP3)
+print(p_div_TP1)
+print(p_div_TP3)
+dev.off()
+
+# repeat for hybrid
+# conserved TF effects TP1
+p_cons_TP1 <- makeGeneGroupHeatmap(.conserved = TRUE, .timepoint = "TP1",
+                                   .parents_or_hybrid = "hybrid")
+# conserved TF effects TP3
+p_cons_TP3 <- makeGeneGroupHeatmap(.conserved = TRUE, .timepoint = "TP3",
+                                   .parents_or_hybrid = "hybrid")
+# diverged TF effects TP1
+p_div_TP1 <- makeGeneGroupHeatmap(.conserved = FALSE, .timepoint = "TP1",
+                                  .parents_or_hybrid = "hybrid")
+# diverged TF effects TP3
+p_div_TP3 <- makeGeneGroupHeatmap(.conserved = FALSE, .timepoint = "TP3",
+                                  .parents_or_hybrid = "hybrid")
+
+pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/TFeffectGeneGroupHeatmaps_hybrid.pdf",
+    width = 12, height = 7)
+print(p_cons_TP1)
+print(p_cons_TP3)
+print(p_div_TP1)
+print(p_div_TP3)
+dev.off()
+
+#### Diverged Dynamics Example: STB3 TP3 2-1 Spar only ####
+# first increasing genes
+gene_idxs_par <- getGeneGroup(.tf = "STB5", .tp = "TP3", .lfc_sign = 1,
+                              .clust = 1, .org = "par")
+gene_idxs_cer <- getGeneGroup(.tf = "STB5", .tp = "TP3", .lfc_sign = 1,
+                              .clust = 1, .org = "cer")
+plotdf <- getGroupDf(.tf = "STB5", .tp = "TP3", .lfc_sign = 1,
+                     .clust = 1, .genes_cer = gene_idxs_cer,
+                     .genes_par = gene_idxs_par)
+ggplot(plotdf, aes(x = lfc_cer, y = lfc_par)) + 
+  geom_point(aes(color = tf_effect)) +
+  geom_abline(slope = 1, intercept = 0)
+# Spar-only TF response, diverged dynamics
+gene_idxs <- plotdf |> filter(tf_effect == "Spar only" & dynamics == "diverged" &
+                                cer == 2) |> 
+  select(gene_name) |> pull()
+plotGenesTFdel(.tf = "STB5", .gene_idxs = gene_idxs)
+plotGenesTFdel(.tf = "STB5", .gene_idxs = gene_idxs, .single_genes = TRUE, .normalization = "scale")
+# next decreasing genes
+gene_idxs_par <- getGeneGroup(.tf = "STB5", .tp = "TP3", .lfc_sign = -1,
+                              .clust = 1, .org = "par")
+gene_idxs_cer <- getGeneGroup(.tf = "STB5", .tp = "TP3", .lfc_sign = -1,
+                              .clust = 1, .org = "cer")
+plotdf <- getGroupDf(.tf = "STB5", .tp = "TP3", .lfc_sign = -1,
+                     .clust = 1, .genes_cer = gene_idxs_cer,
+                     .genes_par = gene_idxs_par)
+ggplot(plotdf, aes(x = lfc_cer, y = lfc_par)) + 
+  geom_point(aes(color = tf_effect)) +
+  geom_abline(slope = 1, intercept = 0)
+# Spar-only TF response, diverged dynamics
+gene_idxs <- plotdf |> filter(tf_effect == "Spar only" & dynamics == "diverged" &
+                                cer == 2) |> 
+  select(gene_name) |> pull()
+plotGenesTFdel(.tf = "STB5", .gene_idxs = gene_idxs)
+plotGenesTFdel(.tf = "STB5", .gene_idxs = gene_idxs, .single_genes = TRUE, .normalization = "scale")
+
+#### Conserved Dynamics Example: URE2 represses GAT1 and GLN3 ####
+makeUpsetPlot(.df = filter(effectdf, organism == "cer" & effect == "level"),
+              .group_name = "deletion", 
+              .group_members = c("GLN3", "GAT1", "URE2"),
+              .item_names = "gene_name") # no shared level effects
+makeUpsetPlot(.df = filter(effectdf, organism == "cer" & effect == "dynamics"),
+              .group_name = "deletion", 
+              .group_members = c("GLN3", "GAT1", "URE2"),
+              .item_names = "gene_name") # a decent number of shared dynamics effects
+# also true in par, hyc, hyp, but GAT1 and URE2 just have way fewer single effects and GLN3 has way more:
+makeUpsetPlot(.df = filter(effectdf, organism == "par" & effect == "dynamics"),
+              .group_name = "deletion", 
+              .group_members = c("GLN3", "GAT1", "URE2"),
+              .item_names = "gene_name")
+makeUpsetPlot(.df = filter(effectdf, organism == "hyc" & effect == "dynamics"),
+              .group_name = "deletion", 
+              .group_members = c("GLN3", "GAT1", "URE2"),
+              .item_names = "gene_name")
+makeUpsetPlot(.df = filter(effectdf, organism == "hyp" & effect == "dynamics"),
+              .group_name = "deletion", 
+              .group_members = c("GLN3", "GAT1", "URE2"),
+              .item_names = "gene_name")
 # so Spar's URE2-GAT1-GLN3 environment is dominant in the hybrid. 
 # Scer has much higher GAT1 expression, why would Spar's environment be dominant? Seems like a coding change
 # Other big difference: Scer has about 50 GAT1-URE2 shared genes, where Spar and hybrid only have 3-5
@@ -389,12 +1544,12 @@ plotGenesTFdel(.gene_idxs = gene_idxs11, .tf = "URE2", .parents_or_hybrid = "hyb
 # Interestingly there is an effect at the early timepoint in both hybrid alleles. Why weren't they flagged as dynamic effects?
 effectdf |> filter(organism %in% c("hyc", "hyp") &
                      deletion %in% c("GAT1", "URE2") &
-                     gene_name %in% gene_idxs) |> select(effect, deletion) |> table()
+                     gene_name %in% gene_idxs11) |> select(effect, deletion) |> table()
 # They're all URE2 only, but there is a slight effect in GAT1
 TFdeldf |> filter(organism %in% c("hyc", "hyp") &
                     deletion == "GAT1" &
                     timepoint == "TP1" &
-                    gene_name %in% gene_idxs) |> 
+                    gene_name %in% gene_idxs11) |> 
   arrange(desc(lfc)) # Only enough power to detect a couple, namely the very classy haze protective factor HPF1, which reduces cloudiness in white wines
 # But it's not just HPF1/YOL155C causing this -- most hybrid orthologs are up decently in URE2, just without significant pvalues
 
@@ -414,10 +1569,69 @@ plotGenesTFdel(.gene_idxs = gene_idxs22, .tf = "URE2", .parents_or_hybrid = "hyb
 # in hybrid, there is some evidence of an early timepoint effect---especially URE2 delete on increasing genes
 # but the late timepoint effect is really only seen in Scer
 
+# investigating GAT1 Scer_only regulated genes
+# first increasing genes
+gene_idxs_par <- getGeneGroup(.tf = "GAT1", .tp = "TP3", .lfc_sign = 1,
+                              .clust = 2, .org = "par")
+gene_idxs_cer <- getGeneGroup(.tf = "GAT1", .tp = "TP3", .lfc_sign = 1,
+                              .clust = 2, .org = "cer")
+plotdf <- getGroupDf(.tf = "GAT1", .tp = "TP3", .lfc_sign = 1,
+                     .clust = 2, .genes_cer = gene_idxs_cer,
+                     .genes_par = gene_idxs_par)
+ggplot(plotdf, aes(x = lfc_cer, y = lfc_par)) + 
+  geom_point(aes(color = tf_effect)) +
+  geom_abline(slope = 1, intercept = 0)
+# Scer-only TF response, conserved dynamics
+gene_idxs <- plotdf |> filter(tf_effect == "Scer only" & dynamics == "conserved" &
+                                par == 2) |> 
+  select(gene_name) |> pull()
+plotGenesTFdel(.tf = "GAT1", .gene_idxs = gene_idxs)
+plotGenesTFdel(.tf = "GAT1", .gene_idxs = sample(gene_idxs, size = 12), .single_genes = TRUE, .normalization = "scale")
+# (there are no decreasing genes for this cluster)
+
+# investigating GAT1 Scer_only regulated genes
+# first increasing genes
+gene_idxs_par <- getGeneGroup(.tf = "GAT1", .tp = "TP3", .lfc_sign = 1,
+                              .clust = 1, .org = "par")
+gene_idxs_cer <- getGeneGroup(.tf = "GAT1", .tp = "TP3", .lfc_sign = 1,
+                              .clust = 1, .org = "cer")
+plotdf <- getGroupDf(.tf = "GAT1", .tp = "TP3", .lfc_sign = 1,
+                     .clust = 1, .genes_cer = gene_idxs_cer,
+                     .genes_par = gene_idxs_par)
+ggplot(plotdf, aes(x = lfc_cer, y = lfc_par)) + 
+  geom_point(aes(color = tf_effect)) +
+  geom_abline(slope = 1, intercept = 0)
+# Scer-only TF response, conserved dynamics
+gene_idxs <- plotdf |> filter(tf_effect == "Scer only" & dynamics == "conserved" &
+                                par == 1) |> 
+  select(gene_name) |> pull()
+plotGenesTFdel(.tf = "GAT1", .gene_idxs = gene_idxs)
+plotGenesTFdel(.tf = "GAT1", .gene_idxs = sample(gene_idxs, size = 12), .single_genes = TRUE, .normalization = "scale")
+# next decreasing genes
+gene_idxs_par <- getGeneGroup(.tf = "GAT1", .tp = "TP3", .lfc_sign = -1,
+                              .clust = 1, .org = "par")
+gene_idxs_cer <- getGeneGroup(.tf = "GAT1", .tp = "TP3", .lfc_sign = -1,
+                              .clust = 1, .org = "cer")
+plotdf <- getGroupDf(.tf = "GAT1", .tp = "TP3", .lfc_sign = -1,
+                     .clust = 1, .genes_cer = gene_idxs_cer,
+                     .genes_par = gene_idxs_par)
+ggplot(plotdf, aes(x = lfc_cer, y = lfc_par)) + 
+  geom_point(aes(color = tf_effect)) +
+  geom_abline(slope = 1, intercept = 0)
+# Scer-only TF response, conserved dynamics
+gene_idxs <- plotdf |> filter(tf_effect == "Scer only" & dynamics == "conserved" &
+                                par == 1) |> 
+  select(gene_name) |> pull()
+plotGenesTFdel(.tf = "GAT1", .gene_idxs = gene_idxs)
+plotGenesTFdel(.tf = "GAT1", .gene_idxs = sample(gene_idxs, size = 12), .single_genes = TRUE, .normalization = "scale")
+
+
+
 #### Are TF del effects consistent between species? ####
 
 # all TFs, all effect types
-makeEffectsUpset()
+# TODO: update with consolidated upset function, makeUpsetPlot()
+
 # example TF at different effect types
 test_tf <- "BAS1"
 makeEffectsUpset(.tf = test_tf)
@@ -426,34 +1640,8 @@ makeEffectsUpset(.tf = test_tf, .effect = "dynamics")
 # Conclusion: Majority of effects are not only specific to organisms but also even hybrid alleles
 
 # What if we ignore effect type? Just genes and tf
-makeGeneTFUpset <- function(.tf = TFnames) {
-  lt <- list(cer = filter(effectdf, organism == "cer" & deletion %in% .tf & !(effect %in% c("none", "single"))),
-             par = filter(effectdf, organism == "par" & deletion %in% .tf & !(effect %in% c("none", "single"))),
-             hyc = filter(effectdf, organism == "hyc" & deletion %in% .tf & !(effect %in% c("none", "single"))),
-             hyp = filter(effectdf, organism == "hyp" & deletion %in% .tf & !(effect %in% c("none", "single")))) |> 
-    map(.f = mutate, gene_tf_eff = paste0(gene_name, deletion)) |> 
-    map(.f = select, gene_tf_eff) |> 
-    map(.f = pull)
-  plotdf <- make_comb_mat(lt)
-  p <- UpSet(plotdf, 
-             set_order = c("cer", "par", "hyc", "hyp"),
-             comb_order = order(comb_size(plotdf)), # this, I will say, makes ggplot look like a freakin' dream. I literally just wanted to rename the histogram y axis and add counts to the top of the bars
-             top_annotation = HeatmapAnnotation( 
-               "number of genes" = anno_barplot(comb_size(plotdf), 
-                                                ylim = c(0, max(comb_size(plotdf))*1.1),
-                                                border = FALSE, 
-                                                gp = gpar(fill = "black"), 
-                                                height = unit(4, "cm")), 
-               annotation_name_side = "left", 
-               annotation_name_rot = 90))
-  draw(p)
-  decorate_annotation("number of genes", {
-    grid.text(comb_size(plotdf)[column_order(p)], x = seq_along(comb_size(plotdf)), y = unit(comb_size(plotdf)[column_order(p)], "native") + unit(2, "pt"), 
-              default.units = "native", just = c("left", "bottom"), 
-              gp = gpar(fontsize = 6, col = "#404040"), rot = 45)
-  })
-}
-makeGeneTFUpset() # Nope, still gene/TF combos are unique
+
+makeUpsetPlot() # Nope, still gene/TF combos are unique
 
 # TODO: How are these effects this unique? Even each hybrid allele has mostly 
 # unique effects? If I shuffled effects randomly among genes would it look like this?
@@ -1613,6 +2801,332 @@ dev.off()
 
 
 ####### Probably Archive ####### 
+#### divergent gene group examples - HAP2/3/4/5 and Ino2/4 ####
+# # What's different about the TF/species/TP combinations that affect many genes from the ones that barely affect any?
+# 
+# # TODO: After framing beginning of TFdel paper section around "further dissecting"
+# # plasticity clusters into TF reg groups, come back to this and streamline
+# # it into functions that can compare any TFs supplied and also subdivide
+# # results based on genes' WT cluster and direction of LFC
+# 
+# # HAP2, HAP5, MIG1, HAP3, ROX1, INO4 feels like a good group to start with
+# # mainly only affect hybrid, with some notable parental exceptions: HAP3 and ROX1 strongly affect Spar TP2, INO4 strongly affects Spar TP3
+# # All of them strongly affect hyb TP2
+# 
+# # HAP3/ROX1 vs HAP5/MIG1 at Spar TP2
+# # first off, are the same 340-350 genes affected in both deletions?
+# TFdeldf |> filter(timepoint == "TP2" & deletion %in% c("ROX1", "HAP3") & organism == "par") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
+#   select(gene_name, deletion) |> table() # mostly no, wild as it is
+# # grouping these genes into 3 categories: DE ROX1 only, HAP3 only, or both
+# genes_rox1 <- TFdeldf |> filter(timepoint == "TP2" & deletion == "ROX1" & organism == "par") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh & gene_name %in% rownames(counts_tfdel)) |> 
+#   select(gene_name) |> pull()
+# genes_hap3 <- TFdeldf |> filter(timepoint == "TP2" & deletion == "HAP3" & organism == "par") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh & gene_name %in% rownames(counts_tfdel)) |> 
+#   select(gene_name) |> pull()
+# genes_both <- intersect(genes_rox1, genes_hap3)
+# genes_rox1 <- setdiff(genes_rox1, genes_both)
+# genes_hap3 <- setdiff(genes_hap3, genes_both)
+# 
+# plotGenesTFdel(.gene_idxs = genes_both, .tf = "ROX1", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_both, .tf = "HAP3", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_both, .tf = "MIG1", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_both, .tf = "HAP5", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_rox1, .tf = "ROX1", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_rox1, .tf = "HAP3", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_rox1, .tf = "MIG1", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_rox1, .tf = "HAP5", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_hap3, .tf = "ROX1", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_hap3, .tf = "HAP3", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_hap3, .tf = "MIG1", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_hap3, .tf = "HAP5", .parents_or_hybrid = "parents")
+# # well it sure seems like the main difference btwn these genes is seen in 
+# # their WT expression at TP2
+# # the genes with effects in both have divergent expression (peak Spar, peak less Scer)
+# # genes with ROX1 effect have a dip at TP2
+# # genes with HAP3 effect have peak at TP2
+# 
+# # Example 2: INO4, up in Spar TP3 and hybrid TP2 and TP3
+# genes_ino4par <- TFdeldf |> filter(timepoint == "TP3" & deletion == "INO4" & organism == "par") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh & gene_name %in% rownames(counts_tfdel)) |> 
+#   select(gene_name) |> pull() # 348 genes
+# genes_ino4hyctp2 <- TFdeldf |> filter(timepoint == "TP2" & deletion == "INO4" & organism == "hyc") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh & gene_name %in% rownames(counts_tfdel)) |> 
+#   select(gene_name) |> pull() # 287 genes
+# genes_ino4hyptp2 <- TFdeldf |> filter(timepoint == "TP2" & deletion == "INO4" & organism == "hyp") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh & gene_name %in% rownames(counts_tfdel)) |> 
+#   select(gene_name) |> pull() # 262 genes
+# genes_ino4hyctp3 <- TFdeldf |> filter(timepoint == "TP3" & deletion == "INO4" & organism == "hyc") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh & gene_name %in% rownames(counts_tfdel)) |> 
+#   select(gene_name) |> pull() # 218 genes
+# genes_ino4hyptp3 <- TFdeldf |> filter(timepoint == "TP3" & deletion == "INO4" & organism == "hyp") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh & gene_name %in% rownames(counts_tfdel)) |> 
+#   select(gene_name) |> pull() # 182 genes
+# length(intersect(genes_ino4hyctp2, genes_ino4hyptp2)) # mostly the same genes between alleles
+# length(intersect(genes_ino4hyctp3, genes_ino4hyptp3)) # fewer shared genes between alleles
+# length(intersect(genes_ino4hyctp2, genes_ino4hyctp3))
+# length(intersect(genes_ino4hyptp2, genes_ino4hyptp3)) # few genes are the same btwn timepoints for either allele
+# length(intersect(genes_ino4par, genes_ino4hyctp3)) # few genes are the same bwn par and hyb
+# # collecting genes shared btwn groups
+# genes_ino4hybtp2 <- intersect(genes_ino4hyctp2, genes_ino4hyptp2)
+# genes_shared <- intersect(x = intersect(x = genes_ino4hybtp2, y = genes_ino4par), 
+#                           y = intersect(genes_ino4hyctp3, genes_ino4hyptp3))
+# genes_ino4par <- setdiff(genes_ino4par, genes_shared)
+# genes_ino4hybtp2 <- setdiff(genes_ino4hybtp2, genes_shared)
+# genes_ino4hyctp3 <- setdiff(genes_ino4hyctp3, genes_shared)
+# genes_ino4hyptp3 <- setdiff(genes_ino4hyptp3, genes_shared)
+# # plotting gene groups
+# plotGenesTFdel(.gene_idxs = genes_shared, .tf = "INO4", .parents_or_hybrid = "parents")
+# # crazy down in both Scer and Spar TP2, but they were identified b/c
+# # they were only DE in Spar at TP3...
+# TFdeldf |> filter(timepoint == "TP2" & deletion == "INO4" & organism == "cer") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh & gene_name %in% genes_shared)
+# TFdeldf |> filter(timepoint == "TP2" & deletion == "INO4" & organism == "par") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh & gene_name %in% genes_shared) # same 4 genes in both species
+# fab4 <- c("YBR177C", "YDR497C", "YER026C", "YJR073C") # 3/4 Myo-inositol related (plus EHT1), YDR497C mentions INO4 direct regulation
+# plotGenesTFdel(.gene_idxs = setdiff(genes_shared, fab4),
+#                .tf = "INO4", .parents_or_hybrid = "parents")
+# # those 4 were completely responsible for INO4del effect
+# # TODO: check other gene groups
+# plotGenesTFdel(genes_ino4par, .tf = "INO4", .parents_or_hybrid = "parents")
+# 
+# # Example 3: YAP1/GAT1 Scer TP3
+# genes_yap1 <- TFdeldf |> filter(timepoint == "TP3" & deletion == "YAP1" & organism == "cer") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh & gene_name %in% rownames(counts_tfdel)) |> 
+#   select(gene_name) |> pull()
+# genes_gat1 <- TFdeldf |> filter(timepoint == "TP3" & deletion == "GAT1" & organism == "cer") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh & gene_name %in% rownames(counts_tfdel)) |> 
+#   select(gene_name) |> pull()
+# genes_both <- intersect(genes_yap1, genes_gat1)
+# genes_yap1 <- setdiff(genes_yap1, genes_both)
+# genes_gat1 <- setdiff(genes_gat1, genes_both)
+# 
+# plotGenesTFdel(.gene_idxs = genes_both, .tf = "YAP1", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_both, .tf = "GAT1", .parents_or_hybrid = "parents")
+# # These genes are supposed to both affect Scer TP3 in YAP1 and GAT1 delete
+# # Why are we not seeing it in GAT1? Probably cause effects are in both directions, but good to check
+# 
+# plotGenesTFdel(.gene_idxs = genes_yap1, .tf = "YAP1", .parents_or_hybrid = "parents")
+# # A very strong effect on Scer TP3
+# TFdeldf |> filter(timepoint == "TP3" & deletion == "YAP1" & organism == "cer") |>
+#   filter(abs(lfc) > eff_thresh & padj < p_thresh & gene_name %in% genes_yap1) |> 
+#   arrange(padj) |> View()
+# plotGenesTFdel(.gene_idxs = genes_yap1, .tf = "GAT1", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_gat1, .tf = "YAP1", .parents_or_hybrid = "parents")
+# plotGenesTFdel(.gene_idxs = genes_gat1, .tf = "GAT1", .parents_or_hybrid = "parents")
+# 
+#### Does anything predict whether TF effects will be conserved between species? ####
+# checkConservedEffect <- function(.focal_org, .lfc, .pval, .tf, .tp, .df) {
+#   test_org <- setdiff(c("cer", "par"), .focal_org)
+#   testdf <- .df |> filter(organism == test_org & deletion == .tf & timepoint == .tp)
+#   return(testdf$padj < p_thresh & sign(testdf$lfc) == sign(.lfc))
+# }
+# plotdf <- TFdeldf |> filter(organism %in% c("cer", "par")) |> 
+#   select(deletion, timepoint, lfc, padj, organism, gene_name) |> 
+#   pivot_wider(id_cols = c("gene_name", "deletion", "timepoint"), names_from = "organism",
+#               values_from = c("lfc", "padj")) |> 
+#   filter(padj_cer < 0.05 | padj_par < 0.05)
+# plotdf$tf_effect_conserved <- (plotdf$padj_cer < p_thresh) & 
+#   (plotdf$padj_par < p_thresh) & (sign(plotdf$lfc_cer) == sign(plotdf$lfc_par))
+# sum(plotdf$tf_effect_conserved, na.rm = TRUE)
+# 
+# # Dynamics
+# plotdf |> left_join(filter(finaldf, experiment == "LowN"),
+#                     by = "gene_name") |> 
+#   select(tf_effect_conserved, dynamics, deletion, timepoint) |> table()
+# 
+# # TODO: mean expression level perhaps? Other factors?
+# 
+
+#### Classifying genes as level or dynamics divergers ####
+# Archived b/c it turns out that genes that have effects at both timepoints tend to have
+# those effects in the same direction (level), so it's more concrete/less euphamistic
+# to simply visualize effects at TP1 vs TP3 instead of classifying genes as 
+# level and dynamics divergers (which requires an extra mental leap)
+# checkEffect <- function(.lfcs, .pvals) {
+# if (length(.lfcs) != length(.pvals)) {
+#   stop("vectors are not the same length\n")
+# }
+# if (length(.lfcs) < 2) {
+#   return("single")
+# }
+# if (all(.pvals > p_thresh)) {
+#   return("none")
+# }
+# sig_lfcs <- .lfcs[.pvals < p_thresh]
+# if (all(abs(sig_lfcs) < eff_thresh)) {
+#   return("none")
+# }
+# if (all(.pvals < p_thresh) &
+#     length(unique(sign(.lfcs))) == 1) {
+#   return("level")
+# }
+# else {
+#   return("dynamics")
+# }
+# }
+# # tests for checkEffect
+# checkEffect(c(5, 3), c(0.001, 0.0005)) # level
+# checkEffect(c(0.5, 3), c(0.001, 0.0005)) # debatable case: one effect size isn't over the eff_thresh, choose level or dynamics
+# checkEffect(c(54, -9, 5), c(1, 1, 0.1)) # none, no sig pvalues
+# checkEffect(c(54, -9, -0.5), c(1, 1, 0.01)) # none, the sig pvalue doesn't have a large enough effect size
+# checkEffect(c(2, -1), c(0.04, 0.01)) # dynamics
+
+# effectdf <- TFdeldf |> 
+#   # filter(timepoint != "TP2") |> 
+#   group_by(deletion, gene_name, organism) |> 
+#   summarise(effect = checkEffect(.lfcs = lfc, .pvals = padj)) |> 
+#   ungroup()
+# 
+# # example, ADE17 (YMR120C) has level effect in BAS1, known to be directly positively regulated by Bas1p
+# bas1_genes <- effectdf |> filter(deletion == "BAS1" & effect == "level") |> 
+#   select(gene_name) |> pull() |> unique()
+# TFdeldf |> filter(deletion == "BAS1" & 
+#                     gene_name %in% bas1_genes &
+#                     timepoint != "TP2") |> 
+#   arrange(lfc)
+# 
+# # Note: TFdel samples missing replicates do not have an estimate in DESeq2:
+# TFdeldf |> filter(deletion == "SWI4" & organism == "cer" & timepoint == "TP3")
+# # Therefore, certain genotypes will only have one timepoint going into checkEffect
+# # such as, SWI4 in Scer:
+# effectdf |> filter(deletion == "SWI4" & organism == "cer") |> select(effect) |> table()
+# 
+# effect_tab <- effectdf |> select(deletion, effect) |> table() 
+# effect_tab # more dynamics than level, but plenty of level
+# tf_order <- names(sort(rank(-(effect_tab[,"dynamics"] + effect_tab[,"level"]))))
+# plotdf <- effectdf |> filter(!(effect %in% c("single", "none")))
+# # all TFs
+# ggplot(plotdf, 
+#        aes(x = deletion)) + 
+#   geom_bar(aes(fill = effect)) +
+#   scale_x_discrete(breaks = tf_order, limits = tf_order) +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+#   facet_wrap(~organism)
+# # Up Scer TFs
+# ggplot(filter(plotdf, deletion %in% Up_TFs_Scer_LowN), 
+#        aes(x = deletion)) + 
+#   geom_bar(aes(fill = effect)) +
+#   scale_x_discrete(breaks = tf_order, limits = tf_order[tf_order %in% Up_TFs_Scer_LowN]) +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+#   facet_wrap(~organism) 
+# # Up Spar TFs
+# ggplot(filter(plotdf, deletion %in% Up_TFs_Spar_LowN), 
+#        aes(x = deletion)) + 
+#   geom_bar(aes(fill = effect)) +
+#   scale_x_discrete(breaks = tf_order, limits = tf_order[tf_order %in% Up_TFs_Spar_LowN]) +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+#   facet_wrap(~organism) # A weird looking plot, mainly b/c PHO4 and HAP2 have a ton of hybrid effects
+# 
+# # does shuffling lfcs create same level/dynamic distribution?
+# shuffleLFCs <- function(.df, .preserve_groups = NULL) {
+#   if (!is.null(.preserve_groups)) {
+#     griddf <- .df |> 
+#       select(.preserve_groups) |> 
+#       unique()
+#     vars <- colnames(griddf)
+#     outdf <- map(c(1:nrow(griddf)), \(i) {
+#       df_group <- .df
+#       for (var in vars) {
+#         df_group <- filter(df_group, 
+#                            .data[[var]] == pull(griddf[i, which(vars == var)]))
+#       }
+#       shuffle_idx <- c(1:nrow(df_group)) |> 
+#         sample(size = nrow(df_group), replace = FALSE)
+#       df_group$pval <- df_group$pval[shuffle_idx]
+#       df_group$padj <- df_group$padj[shuffle_idx]
+#       df_group$lfc <- df_group$lfc[shuffle_idx]
+#       return(df_group)
+#     }) |> purrr::reduce(bind_rows)
+#     return(outdf)
+#   }
+#   else {
+#     outdf <- .df
+#     shuffle_idx <- c(1:nrow(outdf)) |> 
+#       sample(size = nrow(outdf), replace = FALSE)
+#     outdf$pval <- outdf$pval[shuffle_idx]
+#     outdf$padj <- outdf$padj[shuffle_idx]
+#     outdf$lfc <- outdf$lfc[shuffle_idx]
+#     return(outdf)
+#   }
+# }
+# # # tests for shuffleLFCs
+# # testdf <- TFdeldf |> 
+# #   filter(organism %in% c("cer", "par") &
+# #            deletion %in% c("TEC1", "INO4")) |> 
+# #   slice_sample(n = 100000)
+# # testdf |> filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
+# #   select(organism, deletion) |> table() # purposefully choosing very asymetrical tfs
+# # # no group preservation
+# # shuffleLFCs(testdf) |> filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
+# #   select(organism, deletion) |> table() # even spread on both axes
+# # # just preserve nEffects per TF:
+# # shuffleLFCs(testdf, .preserve_groups = "deletion") |>
+# #   filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
+# #   select(organism, deletion) |> table()
+# # # just preserve nEffects per organism
+# # shuffleLFCs(testdf, .preserve_groups = "organism") |>
+# #   filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
+# #   select(organism, deletion) |> table()
+# # # preserve nEffects per organism per deletion (should be the same counts as unshuffled)
+# # shuffleLFCs(testdf, .preserve_groups = c("deletion", "organism")) |>
+# #   filter(abs(lfc) > eff_thresh & padj < p_thresh) |> 
+# #   select(organism, deletion) |> table()
+# 
+# # plotting shuffle with full data
+# shuffledf <- TFdeldf |> 
+#   shuffleLFCs(.preserve_groups = c("deletion", "organism")) |> 
+#   group_by(deletion, gene_name, organism) |> 
+#   summarise(effect = checkEffect(.lfcs = lfc, .pvals = padj)) |> 
+#   ungroup() |> 
+#   filter(!(effect %in% c("none", "single")))
+# ggplot(shuffledf, 
+#        aes(x = deletion)) + 
+#   geom_bar(aes(fill = effect)) +
+#   scale_x_discrete(breaks = tf_order, limits = tf_order) +
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+#   facet_wrap(~organism) 
+# # Level effects basically go away. True whether you preserve same nEffects per organism/TF or not
+# 
+# # Conclusion: way more dynamics than level, but level divergers are more than expected by chance
+# # Amount of level divergers looks more steady per tf
+# # is that because it's the same genes that have level effects in many TFs?
+# 
+# # UpSet only allows sets up to 31, so only including top 31 TFs with the most effects
+# makeUpsetPlot(.df = filter(effectdf, organism == "par" & effect == "level"), # change to different organisms
+#               .group_name = "deletion", .group_members = tf_order[1:31],
+#               .item_names = "gene_name")
+# # HAP2 has the most shared effects in Scer, shared with GLN3, HAP3, HAP5, GCR2, RTG3:
+# makeUpsetPlot(.df = filter(effectdf, organism == "cer" & effect == "level"),
+#               .group_name = "deletion", 
+#               .group_members = c("GLN3", "HAP2", "HAP3", "HAP5", "GCR2", "RTG3"),
+#               .item_names = "gene_name")
+# makeUpsetPlot(.df = filter(effectdf, organism == "par" & effect == "level"),
+#               .group_name = "deletion", 
+#               .group_members = c("GLN3", "HAP2", "HAP3", "HAP5", "GCR2", "RTG3"),
+#               .item_names = "gene_name") # even more true in Spar
+# # Not really seen to the same extent in dynamics:
+# makeUpsetPlot(.df = filter(effectdf, organism == "cer" & effect == "dynamics"),
+#               .group_name = "deletion", 
+#               .group_members = c("GLN3", "HAP2", "HAP3", "HAP5", "GCR2", "RTG3"),
+#               .item_names = "gene_name")
+# makeUpsetPlot(.df = filter(effectdf, organism == "par" & effect == "dynamics"),
+#               .group_name = "deletion", 
+#               .group_members = c("GLN3", "HAP2", "HAP3", "HAP5", "GCR2", "RTG3"),
+#               .item_names = "gene_name")
+# # What are those 23 genes in Spar that all respond to HAP2-3-5 deletions with level change?
+# effectdf |> filter(deletion %in% c("HAP2", "HAP3", "HAP5") & 
+#                      organism == "par" & 
+#                      effect == "level") |> select(gene_name) |> 
+#   table() |> sort(decreasing = TRUE)
+# # ATP synthetase components: ATP1, ATP3, ATP16, ATP5, ATP17
+# # other mitochondiral inner membrane respiratory genes: PET9, MIC10, COX9
+# # Makes sense, HAP2/3/4/5 is a complex that activates respiratory gene expression
+# 
+# # conclusion: except for the HAP complex, different TFdels cause different sets of genes to change level
+
+
 # ### level plots
 # # levuppar1
 # plotlist <- vector(mode = "list", length = length(TFnames)*2)
@@ -1823,74 +3337,6 @@ dev.off()
 # overrepresesnted in diverged: HAP4, SKN7, (also a little: CBF1, HAP3, HAP5, INO2, PHO4, SWI4, SUM1, STB5)
 # overrepresesnted in conserved: GAT1, GCN4, GZF3, MSN2, LEU3, RFX1, RGT1, SOK2 (also a little: ARG81, GLN3, MBP1, MIG1, RIM101, URE2, YAP1, ZAP1)
 # but no real outliers
-
-#### Genes with high mean and variance across environments are more connected ####
-# TODO: Now that mean is also affected not just variance, you need to correct
-# for mean expr if you're gonna say that conserved have more or diverged have more effects
-# But this is less important than getting to the effects on cluster mean expression 
-
-# conserved genes tend to have higher mean expression and variance
-# is this related to how they tend to be affected by more TF deletions?
-load("data_files/Cleaned_Counts.RData")
-cer_counts <- counts[, sample_info$organism == "cer" &
-                       sample_info$experiment != "LowN"]
-par_counts <- counts[, sample_info$organism == "par" &
-                       sample_info$experiment != "LowN"]
-plotdf <- bind_rows(x = tibble(gene_name = rownames(cer_counts),
-                               mean_expr = rowMeans(cer_counts),
-                               var_expr = rowVars(cer_counts),
-                               organism = "cer"),
-                    y = tibble(gene_name = rownames(par_counts),
-                               mean_expr = rowMeans(par_counts),
-                               var_expr = rowVars(par_counts),
-                               organism = "par")) |> 
-  right_join(tfdf, by = c("gene_name", "organism")) |> 
-  filter(padj < p_thresh) |> 
-  group_by(gene_name, cer, par, dynamics, organism,
-           timepoint, mean_expr, var_expr) |> 
-  summarise(n_tfs = n(),
-            tfs = list(deletion)) |> 
-  ungroup()
-plotdf$is_highly_connected <- plotdf$n_tfs >= ntf_cutoff
-# Mean
-ggplot(plotdf, aes(x = log2(mean_expr), y = n_tfs)) + 
-  geom_point(aes(color = dynamics))
-ggplot(plotdf, aes(x = log2(mean_expr))) + 
-  geom_density(aes(fill = dynamics), alpha = 0.5)
-ggplot(plotdf, aes(x = log2(mean_expr))) + 
-  geom_density(aes(fill = is_highly_connected), alpha = 0.5)
-# Variance
-ggplot(plotdf, aes(x = log2(var_expr), y = n_tfs)) + 
-  geom_point(aes(color = dynamics)) +
-  geom_smooth(aes(color = dynamics), method = "lm")
-ggplot(plotdf, aes(x = log2(var_expr))) + 
-  geom_density(aes(fill = dynamics), alpha = 0.5)
-# the most highly connected genes do have much higher variance:
-pdf("../../aligning_the_molecular_phenotype/paper_figures/TFdel/var_density.pdf",
-    width = 3.5, height = 2)
-ggplot(plotdf, aes(x = log2(var_expr))) + 
-  geom_density(aes(fill = is_highly_connected), alpha = 0.5) +
-  scale_fill_discrete(type = c("grey", "purple"),
-                      limits = c(FALSE, TRUE),
-                      labels = c(paste0("< ", ntf_cutoff, " TFs affecting gene"),
-                                 paste0(ntf_cutoff, " + TFs affecting gene"))) + 
-  xlab("expression variance across \nenvironments (log2 scale)") +
-  theme_classic() +
-  theme(legend.title = element_blank(),
-        legend.position = "right")
-dev.off()
-
-# Is there an excess of variance among highly connected genes, controlling for mean?
-# not highly connected
-ggplot(plotdf, aes(x = log2(mean_expr), y = log2(var_expr))) +
-  geom_point(data = filter(plotdf, !is_highly_connected),
-             aes(color = is_highly_connected), alpha = 0.1) +
-  geom_smooth(method = "lm")
-# highly connected
-ggplot(plotdf, aes(x = log2(mean_expr), y = log2(var_expr))) +
-  geom_point(data = filter(plotdf, is_highly_connected),
-             aes(color = is_highly_connected), alpha = 0.1) +
-  geom_smooth(method = "lm") # doesn't look like it
 
 
 #### bubble plots of single gene lfc versus mean expr of WT/TFdel ####
@@ -5187,7 +6633,7 @@ plotdf <- spaldf |> filter(coefficient == "species" & experiment == "all") |>
 sum(plotdf$TFreg)
 sum(!plotdf$TFreg)
 plotdf$adj_effect_size <- if_else(plotdf$pvalue < p_thresh,
-                                  true = plotdf$effect_size,
+                                  true = plotdf <- _size,
                                   false = 0)
 ggplot(plotdf, aes(x = TFreg, y = adj_effect_size)) + geom_jitter()
 # nothing obvious, and we just care about obvious

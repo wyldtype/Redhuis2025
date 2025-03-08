@@ -289,7 +289,6 @@ qcdf <- left_join(poisdf,
 load("data_files/FinalDataframe3Disp.RData")
 qcdf <- filter(qcdf, gene_name %in% unlist(finaldf[finaldf$experiment == "LowN",
                                                    "gene_name"]))
-
 #### QC Exploration ####
 
 # are effect size estimates and SMD correlated?
