@@ -1,5 +1,5 @@
 sapply(c("dplyr", "readr", "tidyr", "purrr", "ggplot2", "openxlsx", "matrixStats"), require, character.only=TRUE)
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2024")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025")
 
 #### Checking alignment stats ####
 # tagseq
@@ -624,9 +624,6 @@ cat("percent sample info columns in same order as count data (before matching): 
     sum(colnames(counts)==sample_info$sample_name)/ncol(counts))
 
 #### Renaming replicates in LowN ####
-
-# TODO: some LowN replicates have duplicate names --- maybe just one, P5_A10 in
-# GCN4delete par TP3
 sample_info |> group_by(organism, time_point_str, well_flask_ID,
                         experiment, genotype) |> 
   summarise(nreps = n()) |> filter((organism != "hyb" & nreps == 1) |
@@ -725,6 +722,7 @@ sample_info <- select(sample_info, -"new_id")
 # checking example (two C5_A10s for the 960 timepoint)
 sample_info |> filter(experiment == "LowN" & organism == "par" &
                         genotype == "GCN4delete")
+# should have additional tag P1 or P2 on the C5_A10s
 
 #### misc filtering of additional samples and genes ####
 
@@ -736,7 +734,7 @@ sample_info <- sample_info[keep,]
 counts <- counts[,(colnames(counts) %in% sample_info$sample_name)]
 
 # our 46 TF deletions
-TFdel_lookup <- read_delim("data_files/downloaded_genomes_and_features/46TFdelLookup.csv", col_names = FALSE, col_select = c(1,2), delim = ";") # gets some warnings, but so far has been fine
+TFdel_lookup <- read_delim("data_files/downloaded_genomes_and_features/yeastract_46TFs.csv", col_names = FALSE, col_select = c(1,2), delim = ";") # gets some warnings, but so far has been fine
 colnames(TFdel_lookup) <- c("common", "systematic")
 
 # Check for missing (NA) values
@@ -1011,7 +1009,6 @@ sum(rownames(counts_unnorm) == rownames(counts))/nrow(counts)
 sum(colnames(counts_unnorm) == colnames(counts))/ncol(counts)
 
 #### splitting off hybrid counts ####
-
 counts_allele <- counts[, grepl("_hy[pc]", colnames(counts))]
 counts <- counts[, !grepl("_hy[pc]", colnames(counts))]
 sample_info_allele <- sample_info |> filter(organism == "hyb")
@@ -1115,8 +1112,82 @@ genedf <- tibble(expr = as.numeric(counts_allele[gene_idx,])) |>
 ggplot(genedf, aes(x = cer, y = par)) + geom_point(aes(color = experiment))
 
 #### Heat/Cold QC ####
-# Before extending conclusions to Heat/Cold, we want
-# to compare to tag-seq data in a few categories:
+# Comparing our in-house alignment to the Fay et al. 2023 alignment with a PCA
+fay_inHouse <- cbind(counts[,sample_info$experiment %in% c("Heat", "Cold")],
+                     counts_allele[,sample_info_allele$experiment %in% c("Heat", "Cold")])
+load("data_files/Cleaned_Fay_Counts.RData")
+load("data_files/Cleaned_Fay_Counts_Allele.RData")
+fay_2023 <- cbind(fay, fay_allele)
+colnames(fay_inHouse) <- colnames(fay_inHouse) |> 
+  map(.f = \(nm) {
+    nmnum <- parse_number(nm)
+    if_else(grepl(pattern = "_cer", nm) | grepl(pattern = "_hyc", nm),
+            true = paste0("Sc", nmnum),
+            false = paste0("Sp", nmnum))
+  }) |> unlist()
+common_cols_fay_pca <- intersect(colnames(fay_2023), colnames(fay_inHouse))
+fay_2023 <- fay_2023[, common_cols_fay_pca]
+fay_inHouse <- fay_inHouse[, common_cols_fay_pca]
+colnames(fay_2023) <- paste0(colnames(fay_2023), "_2023")
+colnames(fay_inHouse) <- paste0(colnames(fay_inHouse), "_inHouse")
+common_genes_fay_pca <- intersect(rownames(fay_2023),
+                                  rownames(fay_inHouse))
+# sample pca
+pcamat <- cbind(fay_2023[common_genes_fay_pca,], 
+                fay_inHouse[common_genes_fay_pca,])
+# pcamat <- pcamat[rowMeans(pcamat) > 30 & rownames(pcamat) != "YFL014W",]
+pcamat <- pcamat[rowMeans(pcamat) > 30,]
+covmat <- cov(pcamat)
+colnames(covmat) <- colnames(pcamat)
+pca_res <- prcomp(covmat)
+sample_info_pca <- sample_info |> filter(experiment %in% c("Heat", "Cold")) |> 
+  mutate(sample_name = map(sample_name, .f = \(nm) {
+    nmnum <- parse_number(nm)
+    if_else((grepl(pattern = "_cer", nm) | grepl(pattern = "_hyc", nm)),
+            true = paste0("Sc", nmnum),
+            false = paste0("Sp", nmnum))
+  }) |> unlist())
+sample_info_pca <- sample_info_allele |> filter(experiment %in% c("Heat", "Cold")) |> 
+  mutate(sample_name = map(sample_name, .f = \(nm) {
+    nmnum <- parse_number(nm)
+    if_else((grepl(pattern = "_cer", nm) | grepl(pattern = "_hyc", nm)),
+            true = paste0("Sc", nmnum),
+            false = paste0("Sp", nmnum))
+  }) |> unlist()) |> bind_rows(sample_info_pca)
+pcadf <- tibble(pc1 = pca_res$x[,1], 
+                pc2 = pca_res$x[,2],
+                sample_name = colnames(covmat)) |> 
+  mutate(sample_name_nonunique = gsub(pattern = "_2023", 
+                                      replacement = "", 
+                                      gsub(pattern = "_inHouse", 
+                                           replacement = "",
+                                           sample_name))) |> 
+  left_join(y = sample_info_pca, by = c("sample_name_nonunique"="sample_name"))
+var_pct <- summary(pca_res)$importance[2, 1:2] # % variance explained
+pcadf$sample_num <- parse_number(pcadf$sample_name_nonunique)
+pcadf$alignment <- if_else(grepl(pattern = "_2023", pcadf$sample_name),
+                           true = "2023", false = "inHouse")
+pcadf$tag <- paste0(substring(pcadf$experiment, 1, 1),
+                    pcadf$time_point_num)
+# all 3
+ggplot(pcadf,
+       aes(x = pc1, y = pc2)) + 
+  geom_line(aes(group = sample_name_nonunique,
+                color = organism)) +
+  geom_text(aes(label = tag,
+                color = alignment)) +
+  xlab(paste0("PC1, ", round(var_pct[1]*100, digits = 0), 
+              "% of variance")) + 
+  ylab(paste0("PC2, ", round(var_pct[2]*100, digits = 0), 
+              "% of variance")) +
+  theme(legend.title = element_blank())
+# Those two Scer Heat 30min sample outliers are due to one gene, YFL014W (HSP12),
+# (run the PCA without this gene and the outlier samples will no longer be outliers),
+# which had ~100000 reads in our in-house alignment but an order of magnitude
+# fewer reads in Fay et al. 2023. It is a highly expressed gene in heat shock,
+# good to keep in mind this outlier
+
+# Avg gene expression in YPD 0min samples of RNAseq vs tagseq
 test_allele <- "cer"
 plotdf <- tibble(mean0_LowN = rowMeans(counts[,sample_info$experiment == "LowN" &
                                                 sample_info$time_point_num == 0 &
@@ -1157,12 +1228,7 @@ ggplot(plotdf, aes(x = log2(mean0_LowN), y = log2(mean0_Heat))) + geom_point() #
 ggplot(plotdf, aes(x = log2(mean0_LowN), y = log2(mean0_Cold))) + geom_point() # LowN vs Cold
 # interestingly Spar has more similar expr between experiments
 # (cerevisiae is the T73 wine strain that has the HGT from Torulaspora microellipsoides,
-# paradoxus is the N17 that is similar enough to CBS432 to have its reads aligned to its genome)
-
-# 3) The difference between hybrid alleles seems less distinct than between
-#    parents than in tag-seq, and there's a weird lightning bolt shape in hybrid (Sat growth 2-1 genes at least, but probs more)
-# knowing answers to these will allow us to better conclude if the Heat/Cold results
-# show comparable conclusions to tag-seq, especially for Spar, which is the same strain CBS432
+# paradoxus is the N17 that Fay et al. 2023 aligned to the CBS432 genome)
 
 #### Splitting off TFdel datasets ####
 # probably archive b/c we don't do DESeq2, but we might
@@ -1182,13 +1248,13 @@ counts_TFdel <- list(cer = counts_unnorm[,infos_TFdel$cer$sample_name],
 counts_TFdel_allele <- list(cer = counts_unnorm_allele[,infos_TFdel_allele$cer$sample_name], 
                             par = counts_unnorm_allele[,infos_TFdel_allele$par$sample_name])
 
-# final number of genes (should all be the same number)
-nrow(counts)
-nrow(counts_allele)
-nrow(counts_TFdel$cer)
-nrow(counts_TFdel$par)
-nrow(counts_TFdel_allele$cer)
-nrow(counts_TFdel_allele$par)
+# final number of genes and samples (should all be the same number of rows)
+dim(counts)
+dim(counts_allele)
+dim(counts_TFdel$cer)
+dim(counts_TFdel$par)
+dim(counts_TFdel_allele$cer)
+dim(counts_TFdel_allele$par)
 
 #### saving to .RData file ####
 save(counts, sample_info,

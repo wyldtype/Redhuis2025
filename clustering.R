@@ -4,13 +4,10 @@
 # a happy medium between experiment-specific clustering and combined-experiment
 # clustering is to describe each gene by its combination of 
 # expression "shapes" in each experiment
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2024/")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025/")
 options(stringsAsFactors = FALSE)
 source("functions_for_figure_scripts.R")
-# load("data_files/Clustering_Counts.RData")
-load("data_files/Clustering_Counts_Allele.RData")
-info <- info_allele
-rm(info_allele)
+load("data_files/Clustering_Counts.RData")
 set.seed(23)
 
 ############### Defining Clustering Functions ############ 
@@ -132,7 +129,7 @@ corCluster <- function(.cts, .nClust, .min_var = var_thresh,
 # known co-expressed genes in LowN
 # should split these into genes highest at TP2 (^ genes)
 # and genes lowest at TP2 (v genes)
-toy_idxs <- c("YBR083W", "YBR172C", "YML015C", # v genes
+toy_idxs <- c("YBR172C", "YML015C", # v genes
               "YBR162W-A", "YKL196C", "YBR171W") # ^ genes (the excess of YBRs are coincidental, as I was just scrolling through that part of the module --- although the 171 172 W/C gene pair is probably overlapping)
 toy_mat <- counts_list$par_LowN[toy_idxs,]
 toydf <- makeDf(toy_mat, info, .join_by = "condition")
@@ -145,13 +142,13 @@ ggplot(toydf, aes(x = time_point_str, y = log2(expr + 1))) +
   facet_wrap(~label)
 
 # full dataset
-toy_mat <- counts_list$par_LowN
+toy_mat <- counts_list$cer_HAP4
 toydf <- makeDf(toy_mat, info, .join_by = "condition")
 # no bootstrap
-test_labels <- corCluster(toy_mat, .nClust = 4, .min_var = 2,
+test_labels <- corCluster(toy_mat, .nClust = 2, .min_var = 2,
                           .bootstrapIter = 0)
 # yes bootstrap
-test_labels <- corCluster(toy_mat, .nClust = 4, .min_var = 2,
+test_labels <- corCluster(toy_mat, .nClust = 2, .min_var = 2,
                           .bootstrapIter = 10)
 plotdf <- toydf |> 
   group_by(gene_name, time_point_str) |> 
@@ -492,7 +489,7 @@ var_thresh <- 3
 
 clusterdf_list <- vector(mode = "list", length = 0)
 nclust_lookup <- tibble(experiment = c("HAP4", "LowPi", "CC", "LowN", "Cold", "Heat"),
-                        nclust = c(2, 2, 2, 2, 2, 2))
+                        nclust = c(2, 2, 2, 2, 3, 4))
 nclust_lookup
 for (e in nclust_lookup$experiment) {
   nclust <- nclust_lookup |> filter(experiment == e) |> 
@@ -534,7 +531,7 @@ clusterdf <- getClusterCombination(clusterdf_list)
 # save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering1Disp.RData")
 # save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering3Disp.RData")
 # save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering5Disp.RData")
-save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering3Disp_Allele.RData")
+save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering3Disp.RData")
 
 ### Visualizing cluster expression patterns per experiment
 load("data_files/CorrelationClustering3Disp.RData")

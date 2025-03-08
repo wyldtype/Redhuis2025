@@ -1,7 +1,7 @@
 sapply(c("dplyr", "purrr", "tidyr", "ggpubr", "readr",
          "data.table", "ggplot2", "data.table", "msir", 
          "WGCNA", "energy", "matrixStats"), require, character.only=TRUE)
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2024/")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025/")
 source("functions_for_figure_scripts.R")
 
 #### Reading in Count Data ####
@@ -32,10 +32,17 @@ getGoodExprGeneNames <- function(.organism, .allele, .experiment, .expr_thresh) 
     return(rownames(cts)[means >= .expr_thresh])
   }
 }
-# tests for getGoodExprGeneNames
-test <- getGoodExprGeneNames(.organism = "cer", .allele = "cer",
-                             .experiment = "HAP4", .expr_thresh = cutoffExpr)
-"YPR199C" %in% test
+# # tests for getGoodExprGeneNames
+# # in Scer
+# test <- getGoodExprGeneNames(.organism = "cer", .allele = "cer",
+#                              .experiment = "HAP4", .expr_thresh = cutoffExpr)
+# "YPR199C" %in% test # should be
+# "YFL051C" %in% test # shouldn't be
+# # in Spar
+# test <- getGoodExprGeneNames(.organism = "par", .allele = "par",
+#                              .experiment = "HAP4", .expr_thresh = cutoffExpr)
+# "YPR199C" %in% test # shouldn't be
+# "YFL051C" %in% test # should be
 
 # applying to all genes/groups/experiments
 griddf <- expand_grid(organism = c("cer", "par", "hyb"),
@@ -47,6 +54,7 @@ keep <- map(c(1:nrow(griddf)), \(i) getGoodExprGeneNames(griddf$organism[i],
                                                          .expr_thresh = cutoffExpr)) |> 
   unlist() |> unique()
 "YPR199C" %in% keep
+"YFL051C" %in% keep
 
 # filtering lowly expressed genes
 # our 46 TF deletions
@@ -343,7 +351,7 @@ load("data_files/Cleaned_Counts.RData")
 load("data_files/Cleaned_Counts_Allele.RData")
 ExperimentNames <- c("LowN", "CC", "HAP4", "LowPi", "Heat", "Cold")
 
-# parents
+# parents only for clustering
 # using info and collapsed counts from parents only, all WT samples, replicates averaged
 dim(info)
 dim(collapsed$cer)
@@ -382,44 +390,6 @@ dim(info)
 # saving
 save(counts_list, info, file = "data_files/Clustering_Counts.RData")
 
-# hybrids
-dim(info_allele)
-dim(collapsed_allele$cer)
-dim(collapsed_allele$par)
-sum(grepl("WT", info_allele$condition))/nrow(info_allele) # should have all WT, ratio is 1
-sum(grepl("WT", colnames(collapsed_allele$cer)))/ncol(collapsed_allele$cer) # should have all WT, ratio is 1
-table(colnames(collapsed_allele$cer)) |> table() # should all have one entry, 1 for each condition
-
-### Splitting counts into species/experiments
-counts_list <- vector(mode = "list", length = 0)
-for (e in unique(info_allele$experiment)) {
-  for (a in c("cer", "par")) {
-    cts <- collapsed_allele[[a]][, info_allele$experiment == e]
-    cts <- cts[apply(cts, 1, \(x) !all(is.na(x))),] # removing na genes from Heat/Cold
-    counts_list[[paste(a, e, sep = "_")]] <- cts
-  }
-}
-rm(cts)
-# removing genes that are lowly expressed in BOTH species
-expr_thresh <- 30
-for (e in ExperimentNames) {
-  cer_name <- paste("cer", e, sep = "_")
-  par_name <- paste("par", e, sep = "_")
-  low_cer <- rowMeans(counts_list[[cer_name]]) <= expr_thresh
-  low_par <- rowMeans(counts_list[[par_name]]) <= expr_thresh
-  good_idxs <- !(low_cer & low_par)
-  counts_list[[cer_name]] <- counts_list[[cer_name]][good_idxs,]
-  counts_list[[par_name]] <- counts_list[[par_name]][good_idxs,]
-}
-# now experiments have different nGenes (but alleles from the same experiment will have the same nGenes)
-dim(counts_list$cer_CC)
-dim(counts_list$par_CC)
-dim(counts_list$cer_Cold)
-dim(counts_list$par_Cold)
-dim(info_allele)
-# saving
-save(counts_list, info_allele, file = "data_files/Clustering_Counts_Allele.RData")
-
 #### Categorizing level and dynamics of all genes ####
 # colors used throughout paper
 levdyn_colordf <- tibble(type = c("salmon", "aquamarine", "gold", "greenyellow"),
@@ -439,21 +409,29 @@ load("data_files/single_gene_models.RData")
 load("data_files/Cleaned_Count_Data.RData")
 rm(counts, sample_info)
 ExperimentNames <- c("CC", "HAP4", "LowN", "LowPi", "Heat", "Cold")
-p_thresh <- 1e-5
-eff_thresh <- 1
+p_thresh <- 0.05
+eff_thresh <- log2(1.5) # gene needs to be 1.5x higher in one species than the other to be considered DE
+
+# Benjamini-Hochberg FDR correction of glm p-values
+spaldf$padj <- p.adjust(spaldf$pvalue, method = "BH")
+sum(spaldf$pvalue < p_thresh)
+sum(spaldf$padj < p_thresh)
+
 # Creating mutually exclusive sets of genes based on
 # level and dynamics divergence in parents
 # each gene is a combination of its level category 
 # and its dynamics category
 ### level categories:
-# 1) conserved: abs(lfc) < 1
-# 2) diverged: parent abs(lfc) > 1, not taking into account hybrid yet
+# 1) conserved: pval >= p_thresh
+# 2) diverged: parent pval < p_thresh, not taking into account hybrid yet
 ### dynamics categories (just looking at parents):
 # 1) conserved: 11, 22, NANA
 # 2) diverged: 12, 21
 # 3) diverged in level: NA for one value
-finaldf <- pivot_wider(spaldf, id_cols = c("gene_name", "experiment"), values_from = c("effect_size", "pvalue"),
+finaldf <- pivot_wider(spaldf, id_cols = c("gene_name", "experiment"), 
+                       values_from = c("effect_size", "padj"),
                        names_from = "coefficient") |> 
+  drop_na() |> # 1 gene missing from species, YMR107W
   inner_join(y =  clusterdf, 
              by = join_by("gene_name"=="gene_ID",
                           "experiment"))
@@ -466,14 +444,21 @@ finaldf$dynamics <- map2(finaldf$cer, finaldf$par, \(x, y) {
     return("diverged")
   }
 }) |> unlist()
+
 finaldf$level <- map(c(1:nrow(finaldf)), \(i) {
-  x <- finaldf$pvalue_species[i] |> as.numeric()
+  x <- finaldf$padj_species[i] |> as.numeric()
   y <- finaldf$effect_size_species[i] |> as.numeric()
   output <- if_else(x < p_thresh & abs(y) > eff_thresh,
                     true = "diverged",
                     false = "conserved")
   return(output)
 }) |> unlist()
+
+# for testing how eff_threshold affects level divergence
+# finaldf <- finaldf |> pivot_longer(cols = c("level0", "level15", "level2"),
+#                                    names_to = "eff_threshold",
+#                                    values_to = "level")
+
 table(finaldf$dynamics, finaldf$level, useNA = "always") # checking that all observations are in the 2x2 box
 finaldf <- drop_na(finaldf)
 sum(table(finaldf$level, finaldf$dynamics))
@@ -499,7 +484,7 @@ finaldf <- finaldf |> mutate(bias = if_else(gene_name %in% cer_biased_genes,
                                                                            true = "both",
                                                                            false = "none")))) 
 plotdf <- finaldf |> 
-  filter(pvalue_species < p_thresh | abs(effect_size_species) < eff_thresh)
+  filter(level == "diverged")
 # effect of bias on level divergence
 ggplot(plotdf, aes(x = effect_size_species)) +
   geom_density(aes(fill = bias), alpha = 0.5) 
@@ -553,23 +538,29 @@ finaldf$group4 <- map2(finaldf$level, finaldf$dynamics, \(l, d) {
     return("diverged level and dynamics")
   }
 }) |> unlist()
-# bar plot
-pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/bar.pdf",
-    width = 3, height = 3)
-ggplot(finaldf, aes(x = group4)) +
-  geom_bar(aes(fill = group4)) +
-  geom_text(stat='count', aes(label = after_stat(count)), vjust=-1) +
-  scale_fill_discrete(limits =  levdyn_colordf$limits,
-                      type = levdyn_colordf$type) +
-  scale_x_discrete(limits = levdyn_colordf$limits,
-                   breaks = levdyn_colordf$limits,
-                   labels = levdyn_colordf$labels) +
-  theme_classic() +
-  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
-        legend.position = "none") +
-  xlab("") +
-  ylim(c(0, sum(finaldf$group4 == "conserved level and dynamics") + 1000))
-dev.off()
+
+# # for testing how eff_threshold affects level divergence
+# # bar plot of total number of level and dynamics divergers in each environment
+# pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/bar.pdf",
+#     width = 11, height = 5)
+# ggplot(mutate(finaldf,
+#               experiment = factor(experiment, 
+#                                   levels = c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold"))), 
+#        aes(x = group4)) +
+#   geom_bar(aes(fill = group4)) +
+#   geom_text(stat='count', aes(label = after_stat(count)), vjust=-1) +
+#   scale_fill_discrete(limits =  levdyn_colordf$limits,
+#                       type = levdyn_colordf$type) +
+#   scale_x_discrete(limits = levdyn_colordf$limits,
+#                    breaks = levdyn_colordf$limits,
+#                    labels = levdyn_colordf$labels) +
+#   theme_classic() +
+#   theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+#         legend.position = "none") +
+#   xlab("") +
+#   ylim(c(0, 3500)) +
+#   facet_grid(eff_threshold ~ experiment)
+# dev.off()
 
 ### group codes
 # gene groups factor in a) whether level is conserved, b) whether dynamics are conserved,
@@ -616,16 +607,6 @@ finaldf$group <- apply(finaldf, 1, \(x) {
   return(full_str)
 }) |> unlist()
 
-# adding hybrid clusters
-load("data_files/CorrelationClustering3Disp_Allele.RData")
-finaldf <- left_join(finaldf, y = rename(clusterdf, 
-                                         "cer"="hyc", 
-                                         "par"="hyp"),
-                     by = c("gene_name"="gene_ID", 
-                            "experiment"))
-finaldf |> select(cer, par) |> table()
-finaldf |> select(hyc, hyp) |> table()
-
 # saving
 save(finaldf, levdyn_colordf, file = "data_files/FinalDataframe3Disp.RData")
 
@@ -644,6 +625,7 @@ colnames(goslim) <- c("ORF", # (mandatory) - Systematic name of the gene (or gen
 too_vague_terms <- c("cellular process", "molecular function", "biological process")
 goslim <- filter(goslim, !(GOslim_term %in% too_vague_terms) & 
                    (ORF %in% finaldf$gene_name))
+save(goslim, file = "data_files/GO_Slim.RData")
 
 ################################ Archive ############################
 # #### Reading & Cleaning Data - Lab-specific datasets ####

@@ -212,6 +212,7 @@ plotExpressionProfilePair <- function(.cts1, .cts2,
                                       .show_points = FALSE,
                                       .point_size = 0.1,
                                       .show_confidence_intervals = TRUE,
+                                      .confidence_type = "mean",
                                       .legend = "right",
                                       .normalization = c("none", "log2", "scale", "center"),
                                       .plotlims = NULL,
@@ -341,21 +342,36 @@ plotExpressionProfilePair <- function(.cts1, .cts2,
     if (.method == "line") {
       # lines trace average expr at each timepoint/experiment for each group
       avgexpr1 <- plotdf_e %>% filter(group_id == 1) |> group_by(time_point_num) |> summarise(mean_expr = mean(expr, na.rm = TRUE),
-                                                                                              sd_expr = sd(expr, na.rm = TRUE))
+                                                                                              sd_expr = sd(expr, na.rm = TRUE),
+                                                                                              quant975 = quantile(expr, 0.975, na.rm = TRUE),
+                                                                                              quant025 = quantile(expr, 0.025, na.rm = TRUE))
       avgexpr2 <- plotdf_e %>% filter(group_id == 2) |> group_by(time_point_num) |> summarise(mean_expr = mean(expr, na.rm = TRUE),
-                                                                                              sd_expr = sd(expr, na.rm = TRUE))
+                                                                                              sd_expr = sd(expr, na.rm = TRUE),
+                                                                                              quant975 = quantile(expr, 0.975, na.rm = TRUE),
+                                                                                              quant025 = quantile(expr, 0.025, na.rm = TRUE))
       # adding line segments (the =!! is from rlang and forces the mapping to not be lazily evaluated at the time of plotting):
       p <- p +
         geom_line(data = avgexpr1, aes(x = time_point_num, y = mean_expr), color = .color1, linewidth = 1) +
         geom_line(data = avgexpr2, aes(x = time_point_num, y = mean_expr), color = .color2, linewidth = 1) 
       if (.show_confidence_intervals) {
-        # calculating 95% confidence in the mean interval
-        avgexpr1$CI <- 1.96*(avgexpr1$sd_expr/sqrt(nGenes))
-        avgexpr2$CI <- 1.96*(avgexpr2$sd_expr/sqrt(nGenes))
+        if (.confidence_type == "mean") {
+          # calculating 95% confidence in the mean interval
+          avgexpr1$CI_upper <- 1.96*(avgexpr1$sd_expr/sqrt(nGenes))
+          avgexpr2$CI_upper <- 1.96*(avgexpr2$sd_expr/sqrt(nGenes))
+          avgexpr1$CI_lower <- 1.96*(avgexpr1$sd_expr/sqrt(nGenes))
+          avgexpr2$CI_lower <- 1.96*(avgexpr2$sd_expr/sqrt(nGenes))
+        }
+        if (.confidence_type == "all") {
+          # calculating bounds for 95% of genes
+          avgexpr1$CI_upper <- abs(avgexpr1$quant975) - avgexpr1$mean_expr
+          avgexpr2$CI_upper <- abs(avgexpr2$quant975) - avgexpr1$mean_expr
+          avgexpr1$CI_lower <- abs(avgexpr1$quant025) + avgexpr1$mean_expr
+          avgexpr2$CI_lower <- abs(avgexpr2$quant025) + avgexpr1$mean_expr
+        }
         p <- p + 
-          geom_ribbon(data = avgexpr1, aes(x = time_point_num, ymin = pmax(mean_expr - CI, .plotlims[1]), ymax = pmin(mean_expr + CI, .plotlims[2])),
+          geom_ribbon(data = avgexpr1, aes(x = time_point_num, ymin = pmax(mean_expr - CI_lower, .plotlims[1]), ymax = pmin(mean_expr + CI_upper, .plotlims[2])),
                       fill = .color1, alpha = 0.3) +
-          geom_ribbon(data = avgexpr2, aes(x = time_point_num, ymin = pmax(mean_expr - CI, .plotlims[1]), ymax = pmin(mean_expr + CI, .plotlims[2])),
+          geom_ribbon(data = avgexpr2, aes(x = time_point_num, ymin = pmax(mean_expr - CI_lower, .plotlims[1]), ymax = pmin(mean_expr + CI_upper, .plotlims[2])),
                       fill = .color2, alpha = 0.3)
       }
     }
@@ -377,7 +393,8 @@ plotExpressionProfilePair <- function(.cts1, .cts2,
 #                           info,
 #                           info,
 #                           .method = "line", .show_points = FALSE,
-#                           .normalization = "centered log2")
+#                           .normalization = "scale",
+#                           .confidence_type = "mean")
 # # 2-1 cluster dynamics-divergers in HAP4 and LowPi
 # gene_idxs <- finaldf |> filter(experiment == "HAP4" & cer == 2 & par == 1) |>
 #   select(gene_name) |> pull()
@@ -445,6 +462,205 @@ plotExpressionProfilePair <- function(.cts1, .cts2,
 #                           .color1 = "purple",
 #                           .color2 = "red")
 
+# plotting function to visualize expression profiles of any 2 groups
+# @input: counts, info, and names of two groups to compare
+# @output: ggplot of both expression profiles with loess or line curves tracing the average expression
+plotExpressionRibbonsPair <- function(.cts1, .cts2, 
+                                      .info1, .info2, 
+                                      .name1 = "S. cerevisiae", .name2 = "S. paradoxus",
+                                      .color1 = "orange1", .color2 = "blue2",
+                                      .alpha = 0.2,
+                                      .legend = "right",
+                                      .normalization = c("none", "log2", "scale", "center"),
+                                      .plotlims = NULL,
+                                      .plot_titles = "experiment") {
+  if (.normalization == "none") {
+    norm_func <- identity
+    ylabel <- "Expression (counts per million)"
+  }
+  if (.normalization == "log2") {
+    norm_func <- \(x) {log2(x + 1)}
+    ylabel <- "Expression (log2)"
+  }
+  if (.normalization == "scale") {
+    norm_func <- \(x) {t(scale(t(x)))}
+    ylabel <- "Expression (centered and scaled)"
+  }
+  if (.normalization == "center") {
+    norm_func <- \(x) {(x - rowMeans(x, na.rm = TRUE))}
+    ylabel <- "Expression (centered counts per million)"
+  }
+  if (.normalization == "centered log2") {
+    norm_func <- \(x) {(log2(x + 1) - rowMeans(log2(x + 1), na.rm = TRUE))}
+    ylabel <- "Expression\n(centered log2)"
+  }
+  if (!setequal(unique(.info1$experiment), unique(.info2$experiment))) {
+    stop("sample info dataframes do not contain same set of experiments\n")
+  }
+  ExperimentNames <- unique(.info1$experiment) # arbitrary to do info1 or info2
+  nExperiments <- length(ExperimentNames)
+  nGenes <- nrow(.cts1)
+  info1 <- tibble(experiment = .info1$experiment,
+                  time_point_num = .info1$time_point_num)
+  info2 <- tibble(experiment = .info2$experiment,
+                  time_point_num = .info2$time_point_num)
+  expr1 <- norm_func(.cts1) |> t()
+  colnames(expr1) <- rownames(.cts1)
+  expr2 <- norm_func(.cts2) |> t()
+  colnames(expr2) <- rownames(.cts2)
+  gdf1 <- bind_cols(expr1, info1) |> 
+    pivot_longer(cols = colnames(expr1), names_to = "gene_name", values_to = "expr")
+  gdf1$group_id <- "1"
+  gdf2 <- bind_cols(expr2, info2) |> 
+    pivot_longer(cols = colnames(expr2), names_to = "gene_name", values_to = "expr")
+  gdf2$group_id <- "2"
+  # converting each gene's expression to its mean expression between replicates
+  gdf <- bind_rows(gdf1, gdf2) |> 
+    drop_na() |> # drops genes missing from an experiment (usually Heat/Cold)
+    group_by(group_id, gene_name, experiment, time_point_num) |> 
+    summarise(expr = mean(expr)) |> ungroup()
+  plotdf <- gdf
+  # creating consistent plotlims across all experiments
+  max_expr <- max(gdf$expr, na.rm = TRUE)
+  min_expr <- min(gdf$expr, na.rm = TRUE)
+  plotlimdf <- gdf |> group_by(time_point_num, experiment, group_id) |>
+    summarise(mean_expr = mean(expr),
+              sd_expr = sd(expr)) 
+  max_avg <- plotlimdf |> select(mean_expr) |>
+    pull() |> max(na.rm = TRUE)
+  min_avg <- plotlimdf |> select(mean_expr) |>
+    pull() |> min(na.rm = TRUE)
+  buffer <- plotlimdf |> select(sd_expr) |>
+    pull() |> max(na.rm = TRUE)
+  buffer <- 0.25
+  max_avg <- max_avg + buffer
+  min_avg <- min_avg - buffer
+  if (is.null(.plotlims)) {
+    .plotlims <- c(min_avg, max_avg)
+  }
+  experiment_order <- c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold")
+  # background color rectangles for differentiating the experiments
+  rects <- data.frame(color = c("orchid", "lightgreen", "gold", "orange", "salmon", "lightblue"),
+                      labels = c("Cell Cycle", "Saturated Growth", "Low Nitrogen", "Low Phosphorus", "Heat Stress", "Cold Stress"),
+                      experiment_names = c("CC", "HAP4", "LowN", "LowPi", "Heat", "Cold"))
+  # plotting
+  plotlist <- vector(mode = "list", length = length(unique(plotdf$experiment)))
+  names(plotlist) <- experiment_order[experiment_order %in% unique(plotdf$experiment)]
+  for (e in unique(plotdf$experiment)) {
+    plotdf_e <- filter(plotdf, experiment == e)
+    p <- ggplot() + 
+      theme_classic() +
+      scale_color_discrete(type = c(.color1, .color2), labels = c(.name1, .name2)) +
+      theme(legend.title = element_blank()) +
+      # theme(panel.background = element_rect(fill = alpha(rects$color[rects$experiment_names == e], 0.3),
+      #                                       color = alpha(rects$color[rects$experiment_names == e], 0.3),
+      #                                       size = 0.5, linetype = "solid")) +
+      ylab("") +
+      xlab("") +
+      ylim(.plotlims)
+    # scale_y_continuous(breaks = seq(from = 0, to = ceiling(max_expr), by = 1),
+    #                    limits = seq(from = 0, to = ceiling(max_expr), by = 1),
+    #                    labels = seq(from = 0, to = ceiling(max_expr), by = 1))
+    if (.plot_titles != "none" & .plot_titles == "experiment") {
+      p <- p + ggtitle(rects$labels[rects$experiment_names == e])
+    }
+    if (.plot_titles != "none" & .plot_titles == "ngenes") {
+      p <- p + ggtitle(paste(nGenes, "genes"))
+    }
+    if (.plot_titles != "none" & .plot_titles != "experiment" &
+        .plot_titles != "ngenes") {
+      p <- p + ggtitle(.plot_titles[rects$experiment_names == e])
+    }
+    # collecting ribbons
+    # lines trace average expr at each timepoint/experiment for each group
+    quant_vec1 <- plotdf_e |> filter(group_id == 1) |> group_by(time_point_num) |> summarise(max_expr = max(expr, na.rm = TRUE),
+                                                                                             quant90 = quantile(expr, 0.9, na.rm = TRUE),
+                                                                                             quant80 = quantile(expr, 0.8, na.rm = TRUE),
+                                                                                             quant60 = quantile(expr, 0.6, na.rm = TRUE),
+                                                                                             quant55 = quantile(expr, 0.55, na.rm = TRUE),
+                                                                                             quant45 = quantile(expr, 0.45, na.rm = TRUE),
+                                                                                             quant40 = quantile(expr, 0.4, na.rm = TRUE),
+                                                                                             quant20 = quantile(expr, 0.2, na.rm = TRUE),
+                                                                                             quant10 = quantile(expr, 0.1, na.rm = TRUE),
+                                                                                             min_expr = min(expr, na.rm = TRUE))
+    quant_vec2 <- plotdf_e |> filter(group_id == 2) |> group_by(time_point_num) |> summarise(max_expr = max(expr, na.rm = TRUE),
+                                                                                             quant90 = quantile(expr, 0.9, na.rm = TRUE),
+                                                                                             quant80 = quantile(expr, 0.8, na.rm = TRUE),
+                                                                                             quant60 = quantile(expr, 0.6, na.rm = TRUE),
+                                                                                             quant55 = quantile(expr, 0.55, na.rm = TRUE),
+                                                                                             quant45 = quantile(expr, 0.45, na.rm = TRUE),
+                                                                                             quant40 = quantile(expr, 0.4, na.rm = TRUE),
+                                                                                             quant20 = quantile(expr, 0.2, na.rm = TRUE),
+                                                                                             quant10 = quantile(expr, 0.1, na.rm = TRUE),
+                                                                                             min_expr = min(expr, na.rm = TRUE))
+    # adding ribbons (the order we add them is the order they're arranged in the plot)
+    p <- p +
+      # # min and max, bounds of all genes
+      #   geom_ribbon(data = quant_vec1, aes(x = time_point_num, 
+      #                                      ymin = pmax(min_expr, .plotlims[1]), 
+      #                                      ymax = pmin(max_expr, .plotlims[2])),
+      #               fill = .color1, alpha = .alpha) +
+      #   geom_ribbon(data = quant_vec2, aes(x = time_point_num, 
+      #                                      ymin = pmax(min_expr, .plotlims[1]), 
+      #                                      ymax = pmin(max_expr, .plotlims[2])),
+      #               fill = .color2, alpha = .alpha) +
+      # 90% and 10%, bounds of 80% of all genes
+      geom_ribbon(data = quant_vec1, aes(x = time_point_num, 
+                                         ymin = pmax(quant10, .plotlims[1]), 
+                                         ymax = pmin(quant90, .plotlims[2])),
+                  fill = .color1, alpha = .alpha) +
+      geom_ribbon(data = quant_vec2, aes(x = time_point_num, 
+                                         ymin = pmax(quant10, .plotlims[1]), 
+                                         ymax = pmin(quant90, .plotlims[2])),
+                  fill = .color2, alpha = .alpha) +
+      # 80% and 20%, bounds of 60% of all genes
+      geom_ribbon(data = quant_vec1, aes(x = time_point_num, 
+                                         ymin = pmax(quant20, .plotlims[1]), 
+                                         ymax = pmin(quant80, .plotlims[2])),
+                  fill = .color1, alpha = .alpha) +
+      geom_ribbon(data = quant_vec2, aes(x = time_point_num, 
+                                         ymin = pmax(quant20, .plotlims[1]), 
+                                         ymax = pmin(quant80, .plotlims[2])),
+                  fill = .color2, alpha = .alpha) +
+      # 60% and 40%, bounds of 20% of all genes
+      geom_ribbon(data = quant_vec1, aes(x = time_point_num, 
+                                         ymin = pmax(quant40, .plotlims[1]), 
+                                         ymax = pmin(quant60, .plotlims[2])),
+                  fill = .color1, alpha = .alpha) +
+      geom_ribbon(data = quant_vec2, aes(x = time_point_num, 
+                                         ymin = pmax(quant40, .plotlims[1]), 
+                                         ymax = pmin(quant60, .plotlims[2])),
+                  fill = .color2, alpha = .alpha) +
+    # 55% and 45%, bounds of 10% of all genes
+    geom_ribbon(data = quant_vec1, aes(x = time_point_num, 
+                                       ymin = pmax(quant45, .plotlims[1]), 
+                                       ymax = pmin(quant55, .plotlims[2])),
+                fill = .color1, alpha = .alpha) +
+      geom_ribbon(data = quant_vec2, aes(x = time_point_num, 
+                                         ymin = pmax(quant45, .plotlims[1]), 
+                                         ymax = pmin(quant55, .plotlims[2])),
+                  fill = .color2, alpha = .alpha)
+    plotlist[[e]] <- p
+  }
+  if (length(plotlist) == 1) {
+    return(plotlist[[1]] + xlab("Timepoint (min)") + ylab(ylabel))
+  }
+  fullplot <- ggarrange(plotlist = plotlist, nrow = 1, ncol = length(unique(plotdf$experiment)),
+                        common.legend = TRUE, legend = .legend)
+  return(annotate_figure(fullplot, bottom = "Timepoint (min)", left = ylabel))
+}
+# # tests for plotExpressionProfilePair
+# gene_idxs <- finaldf |> filter(experiment == "LowPi" & dynamics == "diverged" &
+#                                  cer == 1 & par == 2) |>
+#   select(gene_name) |> pull()
+# plotExpressionRibbonsPair(collapsed$cer[gene_idxs,],
+#                           collapsed$par[gene_idxs,],
+#                           info,
+#                           info,
+#                           .color1 = "orange1",
+#                           .color2 = "blue2",
+#                           .normalization = "scale",
+#                           .plotlims = c(-2.5, 2.5))
 
 # Oh yes
 # plots 4 groups of genes BUT you can't do this willy nilly
@@ -779,6 +995,82 @@ plotGenes <- function(.gene_idxs,
 # plotGenes(gene_idxs[-na_idxs[,1]], .experiment_name = "Heat")
 # plotGenes(gene_idxs[-na_idxs[,1]], .experiment_name = "Cold")
 
+# wrapper for plotExpressionProfile designed for all environments
+plotEnvironments <- function(.gene_idxs,
+                             .normalization = "log2",
+                             .quartet = FALSE,
+                             .plotlims = NULL,
+                             .plot_titles = "none",
+                             .collapsed = TRUE) {
+  if (.collapsed) {
+    counts_cer <- collapsed$cer[.gene_idxs,, drop = FALSE]
+    counts_par <- collapsed$par[.gene_idxs,, drop = FALSE]
+    counts_hyc <- collapsed_allele$cer[.gene_idxs,, drop = FALSE]
+    counts_hyp <- collapsed_allele$par[.gene_idxs,, drop = FALSE]
+    info_cer <- info
+    info_par <- info
+    info_hyc <- info_allele
+    info_hyp <- info_allele
+  }
+  if (!.collapsed) {
+    counts_cer <- counts[.gene_idxs, sample_info$allele == "cer", drop = FALSE]
+    counts_par <- counts[.gene_idxs, sample_info$allele == "par", drop = FALSE]
+    counts_hyc <- counts_allele[.gene_idxs, sample_info_allele$allele == "cer", drop = FALSE]
+    counts_hyp <- counts_allele[.gene_idxs, sample_info_allele$allele == "par", drop = FALSE]
+    info_cer <- sample_info[sample_info$allele == "cer",]
+    info_par <- sample_info[sample_info$allele == "par",]
+    info_hyc <- sample_info_allele[sample_info_allele$allele == "cer",]
+    info_hyp <- sample_info_allele[sample_info_allele$allele == "par",]
+  }
+  if (!.quartet) {
+    p <- plotExpressionProfilePair(.cts1 = counts_cer,
+                                   .cts2 = counts_par,
+                                   .info1 = info_cer,
+                                   .info2 = info_par,
+                                   .name1 = "S. cer",
+                                   .name2 = "S. par",
+                                   .color1 = "orange1",
+                                   .color2 = "blue2",
+                                   .normalization = .normalization,
+                                   .method = "line",
+                                   .show_points = FALSE,
+                                   .show_confidence_intervals = TRUE,
+                                   .plotlims = .plotlims,
+                                   .plot_titles = .plot_titles)
+  }
+  if (.quartet) {
+    p <- plotExpressionProfileQuartet(.cts1 = counts_cer,
+                                      .cts2 = counts_par,
+                                      .cts3 = counts_hyc,
+                                      .cts4 = counts_hyp,
+                                      .info1 = info_cer,
+                                      .info2 = info_par,
+                                      .info3 = info_hyc,
+                                      .info4 = info_hyp,
+                                      .name1 = "S. cer",
+                                      .name2 = "S. par",
+                                      .name3 = "F1, cer allele",
+                                      .name4 = "F1, par allele",
+                                      .color1 = "orange1",
+                                      .color2 = "blue2",
+                                      .color3 = "orange4",
+                                      .color4 = "blue4",
+                                      .normalization = .normalization,
+                                      .method = "line",
+                                      .show_points = FALSE,
+                                      .show_confidence_intervals = TRUE,
+                                      .plotlims = .plotlims,
+                                      .plot_titles = .plot_titles)
+  }
+  return(p)
+}
+# # tests for plotEnvironments
+# gene_idxs <- finaldf |> filter(experiment == "LowPi" & dynamics == "diverged" &
+#                                  cer == 1 & par == 2) |>
+#   select(gene_name) |> pull()
+# plotEnvironments(gene_idxs)
+
+# plots WT vs TFdel in both species
 plotExpressionProfileTFdel <- function(.cts1, .cts2, .cts3, .cts4,
                                        .info1, .info2, .info3, .info4,
                                        .name1 = "S. cerevisiae WT",
@@ -876,7 +1168,7 @@ plotExpressionProfileTFdel <- function(.cts1, .cts2, .cts3, .cts4,
       .plotlims <- c(min_avg, max_avg)
     }
     if (.show_points_wt | .show_points_tfdel) {
-      .plotlims <- c(min_expr, max_expr)
+      .plotlims <- c(min_expr - 0.1, max_expr + 0.1) # buffer b/c TFdel points are very large
     }
   }
   plotdf <- gdf
@@ -894,7 +1186,7 @@ plotExpressionProfileTFdel <- function(.cts1, .cts2, .cts3, .cts4,
   if (.show_points_wt & .show_wt) {
     p <- p + geom_jitter(data = filter(plotdf, genotype == "WT"),
                          aes(x = time_point_str, y = expr, color = group_id), 
-                         size = 0.1, alpha = 0.5, shape = ".")
+                         size = 0.1, alpha = 0.5, shape = ".") 
   }
   if (.show_lines_wt & .show_wt) {
     # lines trace average expr at each timepoint/experiment for each group
@@ -920,7 +1212,7 @@ plotExpressionProfileTFdel <- function(.cts1, .cts2, .cts3, .cts4,
     if (.show_points_tfdel & .show_tfdel) {
       p <- p + geom_jitter(data = filter(plotdf, genotype != "WT"),
                            aes(x = time_point_str, y = expr, color = group_id),
-                           shape = "+", size = 6, width = 0.1)
+                           shape = "+", size = 6, width = 0.1, height = 0) # height = 0 prevents vertical jitter
     }
     if (.show_lines_tfdel & .show_tfdel) {
       # lines trace average expr at each timepoint/experiment for each group
@@ -1035,6 +1327,130 @@ plotExpressionProfileTFdels <- function(.cts,
 # plotExpressionProfileTFdels(.cts = test_counts, .info = test_info,
 #                             .normalization = "none")
 
+plotSingleProfilesTFdel <- function(.cts1, .cts2, .cts3, .cts4,
+                                    .info1, .info2, .info3, .info4,
+                                    .name1 = "S. cerevisiae WT",
+                                    .name2 = "S. paradoxus WT",
+                                    .name3 = "S. cerevisiae TFdel",
+                                    .name4 = "S. paradoxus TFdel",
+                                    .color1 = "orange1",
+                                    .color2 = "blue2",
+                                    .color3 = "orange4",
+                                    .color4 = "blue4",
+                                    .normalization = c("none", "log2", "scale", "centered log2"),
+                                    .show_points_wt = TRUE,
+                                    .show_points_tfdel = TRUE,
+                                    .show_lines_wt = TRUE,
+                                    .show_lines_tfdel = FALSE,
+                                    .show_wt = TRUE,
+                                    .show_tfdel = TRUE,
+                                    .show_confidence_intervals = TRUE,
+                                    .plotlims = NULL) {
+  if (.normalization == "none") {
+    norm_func <- identity
+    ylabel <- "Expression"
+  }
+  if (.normalization == "log2") {
+    norm_func <- \(x) {log2(x + 1)}
+    ylabel <- "Expression (log2)"
+  }
+  if (.normalization == "scale") {
+    norm_func <- \(x) {t(scale(t(x)))}
+    ylabel <- "Expression (centered and scaled)"
+  }
+  if (.normalization == "centered log2") {
+    norm_func <- \(x) {log2(x + 1) - rowMeans(log2(x + 1), na.rm = TRUE)}
+    ylabel <- "Expression (centered log2)"
+  }
+  if (!setequal(unique(.info1$experiment), unique(.info2$experiment))) {
+    stop("sample info dataframes do not contain same set of experiments\n")
+  }
+  info1 <- tibble(experiment = "LowN",
+                  time_point_str = .info1$time_point_str,
+                  genotype = .info1$genotype,
+                  well_flask_ID = .info1$well_flask_ID)
+  info2 <- tibble(experiment = "LowN",
+                  time_point_str = .info2$time_point_str,
+                  genotype = .info2$genotype,
+                  well_flask_ID = .info2$well_flask_ID)
+  info3 <- tibble(experiment = "LowN",
+                  time_point_str = .info3$time_point_str,
+                  genotype = .info3$genotype,
+                  well_flask_ID = .info3$well_flask_ID)
+  info4 <- tibble(experiment = "LowN",
+                  time_point_str = .info4$time_point_str,
+                  genotype = .info4$genotype,
+                  well_flask_ID = .info4$well_flask_ID)
+  expr1 <- norm_func(.cts1) |> t()
+  expr2 <- norm_func(.cts2) |> t()
+  expr3 <- norm_func(.cts3) |> t()
+  expr4 <- norm_func(.cts4) |> t()
+  colnames(expr1) <- rownames(.cts1)
+  colnames(expr2) <- rownames(.cts2)
+  colnames(expr3) <- rownames(.cts3)
+  colnames(expr4) <- rownames(.cts4)
+  gdf1 <- bind_cols(expr1, info1) |> 
+    pivot_longer(cols = colnames(expr1), names_to = "gene_name", values_to = "expr")
+  gdf1$group_id <- "1"
+  gdf2 <- bind_cols(expr2, info2) |> 
+    pivot_longer(cols = colnames(expr2), names_to = "gene_name", values_to = "expr")
+  gdf2$group_id <- "2"
+  gdf3 <- bind_cols(expr3, info3) |> 
+    pivot_longer(cols = colnames(expr3), names_to = "gene_name", values_to = "expr")
+  gdf3$group_id <- "3"
+  gdf4 <- bind_cols(expr4, info4) |> 
+    pivot_longer(cols = colnames(expr4), names_to = "gene_name", values_to = "expr")
+  gdf4$group_id <- "4"
+  # enumerating replicates, so each one can stack right on top of each other
+  plotdf <- bind_rows(gdf1, gdf2, gdf3, gdf4)
+  plotdf <- plotdf |> group_by(group_id, genotype, time_point_str, gene_name) |> 
+    reframe(rep = rank(gene_name, ties.method = "first"),
+            gene_name = gene_name,
+            time_point_str = time_point_str,
+            genotype = genotype,
+            expr = expr,
+            group_id = group_id)
+  plotdf$rep <- if_else(plotdf$genotype == "WT",
+                        true = 1, false = plotdf$rep)
+  # plotting
+  p <- ggplot() + 
+    theme_classic() +
+    scale_color_discrete(type = c(.color1, .color2, .color3, .color4), 
+                         labels = c(.name1, .name2, .name3, .name4),
+                         limits = c("1", "2", "3", "4")) +
+    theme(legend.title = element_blank(),
+          legend.position = "none") +
+    ylab("") +
+    xlab("")
+  # lines trace average expr at each timepoint/experiment for each group
+  avgexpr1 <- plotdf %>% filter(group_id == 1) |> group_by(time_point_str, group_id, gene_name) |> summarise(mean_expr = mean(expr, na.rm = TRUE),
+                                                                                                             sd_expr = sd(expr, na.rm = TRUE))
+  avgexpr2 <- plotdf %>% filter(group_id == 2) |> group_by(time_point_str, group_id, gene_name) |> summarise(mean_expr = mean(expr, na.rm = TRUE),
+                                                                                                             sd_expr = sd(expr, na.rm = TRUE))
+  p <- p +
+    geom_line(data = avgexpr1, aes(x = time_point_str, y = mean_expr, group = interaction(group_id, gene_name)), color = .color1) +
+    geom_line(data = avgexpr2, aes(x = time_point_str, y = mean_expr, group = interaction(group_id, gene_name)), color = .color2) +
+    geom_line(data =  filter(plotdf, group_id == 3),
+              position = position_nudge(x = 0.05),
+              aes(x = time_point_str, y = expr,
+                  color = group_id, group = interaction(group_id, time_point_str, gene_name))) +
+    geom_point(data =  filter(plotdf, group_id == 3),
+               position = position_nudge(x = 0.05),
+               size = 0.25,
+               aes(x = time_point_str, y = expr,
+                   color = group_id)) +
+    geom_line(data =  filter(plotdf, group_id == 4),
+              position = position_nudge(x = -0.05),
+              aes(x = time_point_str, y = expr,
+                  color = group_id, group = interaction(group_id, time_point_str, gene_name))) +
+    geom_point(data =  filter(plotdf, group_id == 4),
+               position = position_nudge(x = -0.05),
+               size = 0.25,
+               aes(x = time_point_str, y = expr,
+                   color = group_id)) +
+  facet_wrap(~gene_name)
+  return(p)
+}
 ### proportional area plots, set of 4
 plotPropArea <- function(x1, x2, x3, x4, 
                          .colors = levdyn_colordf$type,
@@ -1092,26 +1508,76 @@ plotPropArea <- function(x1, x2, x3, x4,
     theme_void() +
     theme(legend.position = "none")
 }
-# tests for plotPropArea
+# # tests for plotPropArea
 # plotPropArea(x1 = c(1870, 683, 23, 0), x2 = c(17, 32, 24, 1),
 #              x3 = c(177, 436, 148, 89), x4 = c(17, 30, 16, 10),
 #              .colors = c("red", "green", "blue", "yellow"))
 
+### proportional area plots, just one set of 4
+plotPropAreaSingle <- function(.counts,
+                               .colors = levdyn_colordf$type,
+                               .size_bounds = 14,
+                               .text_bounds = 10,
+                               .text_size = 8,
+                               .xlims = NULL,
+                               .ylims = NULL) {
+  sqx <- sqrt(.counts)
+  boundx <- if_else(sqx > .size_bounds, true = sqx/2, false = .text_bounds)
+  df <- tibble(box_x = c(sqx[1]/2, -sqx[2]/2, -sqx[3]/2, sqx[4]/2),
+               box_y = c(sqx[1]/2, sqx[2]/2, -sqx[3]/2, -sqx[4]/2),
+               text_x = c(boundx[1], -boundx[2], -boundx[3], boundx[4]),
+               text_y = c(boundx[1], boundx[2], -boundx[3], -boundx[4]),
+               size = sqx, color = .colors, label = .counts)
+  mm <- max(df$size)*1.1
+  if (is.null(.xlims)) {
+    .xlims <- c(-max(sqx), max(sqx))
+  }
+  if (is.null(.ylims)) {
+    .ylims <- c(-max(sqx), max(sqx))
+  }
+  ggplot(data=df, aes(x = box_x, y = box_y, width=size, height=size,
+                      group=factor(size))) +
+    geom_tile(fill = df$color) +
+    geom_text(data = filter(df, size > .size_bounds),
+              aes(label = label, x = text_x, y = text_y),
+              col = "white", size = .text_size) +
+    geom_text(data = filter(df, size <= .size_bounds),
+              aes(label=label, x = text_x, y = text_y),
+              col = "black", size = .text_size) +
+    geom_hline(aes(yintercept = 0), linewidth = 1) +
+    geom_vline(aes(xintercept = 0), linewidth = 1) +
+    coord_fixed() +
+    theme_void() +
+    theme(legend.position = "none") +
+    xlim(.xlims) +
+    ylim(.ylims)
+}
+# # tests for plotPropAreaSingle
+# plotPropAreaSingle(.counts = c(1870, 17, 177, 10),
+#                    .colors = c("red", "green", "blue", "yellow"),
+#                    .size_bounds = 12, .text_size = 5)
+
 # Wrapper function for plotExpressionProfileTFdel
-plotGenesTFdel <- function(.gene_idxs, .tf, .parents_or_hybrid = "parents") {
-  if (.parents_or_hybrid == "parents") {
+plotGenesTFdel <- function(.gene_idxs, .tf, .parents_or_hybrid = "parents",
+                           .plotlims = NULL, .single_genes = FALSE,
+                           .normalization = "log2") {
+  if (.parents_or_hybrid == "parents" & !.single_genes) {
     p <- plotExpressionProfileTFdel(.cts1 = counts_tfdel[.gene_idxs,
                                                     sample_info_tfdel$organism == "cer" &
-                                                      sample_info_tfdel$genotype == "WT"],
+                                                      sample_info_tfdel$genotype == "WT",
+                                                    drop = FALSE],
                                .cts2 = counts_tfdel[.gene_idxs,
                                                     sample_info_tfdel$organism == "par" &
-                                                      sample_info_tfdel$genotype == "WT"],
+                                                      sample_info_tfdel$genotype == "WT",
+                                                    drop = FALSE],
                                .cts3 = counts_tfdel[.gene_idxs,
                                                     sample_info_tfdel$organism == "cer" &
-                                                      sample_info_tfdel$genotype == paste0(.tf, "delete")],
+                                                      sample_info_tfdel$genotype == paste0(.tf, "delete"),
+                                                    drop = FALSE],
                                .cts4 = counts_tfdel[.gene_idxs,
                                                     sample_info_tfdel$organism == "par" &
-                                                      sample_info_tfdel$genotype == paste0(.tf, "delete")],
+                                                      sample_info_tfdel$genotype == paste0(.tf, "delete"),
+                                                    drop = FALSE],
                                .info1 = sample_info_tfdel[sample_info_tfdel$organism == "cer" &
                                                             sample_info_tfdel$genotype == "WT",],
                                .info2 = sample_info_tfdel[sample_info_tfdel$organism == "par" &
@@ -1120,21 +1586,25 @@ plotGenesTFdel <- function(.gene_idxs, .tf, .parents_or_hybrid = "parents") {
                                                             sample_info_tfdel$genotype == paste0(.tf, "delete"),],
                                .info4 = sample_info_tfdel[sample_info_tfdel$organism == "par" &
                                                             sample_info_tfdel$genotype == paste0(.tf, "delete"),],
-                               .normalization = "log2")
+                               .normalization = .normalization, .plotlims = .plotlims)
   }
-  if (.parents_or_hybrid == "hybrid") {
+  if (.parents_or_hybrid == "hybrid" & !.single_genes) {
     p <- plotExpressionProfileTFdel(.cts1 = counts_tfdel_allele[.gene_idxs,
                                                            sample_info_tfdel_allele$allele == "cer" &
-                                                             sample_info_tfdel_allele$genotype == "WT"],
+                                                             sample_info_tfdel_allele$genotype == "WT",
+                                                           drop = FALSE],
                                .cts2 = counts_tfdel_allele[.gene_idxs,
                                                            sample_info_tfdel_allele$allele == "par" &
-                                                             sample_info_tfdel_allele$genotype == "WT"],
+                                                             sample_info_tfdel_allele$genotype == "WT",
+                                                           drop = FALSE],
                                .cts3 = counts_tfdel_allele[.gene_idxs,
                                                            sample_info_tfdel_allele$allele == "cer" &
-                                                             sample_info_tfdel_allele$genotype == paste0(.tf, "delete")],
+                                                             sample_info_tfdel_allele$genotype == paste0(.tf, "delete"),
+                                                           drop = FALSE],
                                .cts4 = counts_tfdel_allele[.gene_idxs,
                                                            sample_info_tfdel_allele$allele == "par" &
-                                                             sample_info_tfdel_allele$genotype == paste0(.tf, "delete")],
+                                                             sample_info_tfdel_allele$genotype == paste0(.tf, "delete"),
+                                                           drop = FALSE],
                                .info1 = sample_info_tfdel_allele[sample_info_tfdel_allele$allele == "cer" &
                                                                    sample_info_tfdel_allele$genotype == "WT",],
                                .info2 = sample_info_tfdel_allele[sample_info_tfdel_allele$allele == "par" &
@@ -1143,10 +1613,70 @@ plotGenesTFdel <- function(.gene_idxs, .tf, .parents_or_hybrid = "parents") {
                                                                    sample_info_tfdel_allele$genotype == paste0(.tf, "delete"),],
                                .info4 = sample_info_tfdel_allele[sample_info_tfdel_allele$allele == "par" &
                                                                    sample_info_tfdel_allele$genotype == paste0(.tf, "delete"),],
-                               .normalization = "log2")
+                               .normalization = .normalization, .plotlims = .plotlims)
+  }
+  if (.parents_or_hybrid == "parents" & .single_genes) {
+    p <- plotSingleProfilesTFdel(.cts1 = counts_tfdel[.gene_idxs,
+                                                      sample_info_tfdel$organism == "cer" &
+                                                        sample_info_tfdel$genotype == "WT",
+                                                      drop = FALSE],
+                                 .cts2 = counts_tfdel[.gene_idxs,
+                                                      sample_info_tfdel$organism == "par" &
+                                                        sample_info_tfdel$genotype == "WT",
+                                                      drop = FALSE],
+                                 .cts3 = counts_tfdel[.gene_idxs,
+                                                      sample_info_tfdel$organism == "cer" &
+                                                        sample_info_tfdel$genotype == paste0(.tf, "delete"),
+                                                      drop = FALSE],
+                                 .cts4 = counts_tfdel[.gene_idxs,
+                                                      sample_info_tfdel$organism == "par" &
+                                                        sample_info_tfdel$genotype == paste0(.tf, "delete"),
+                                                      drop = FALSE],
+                                 .info1 = sample_info_tfdel[sample_info_tfdel$organism == "cer" &
+                                                              sample_info_tfdel$genotype == "WT",],
+                                 .info2 = sample_info_tfdel[sample_info_tfdel$organism == "par" &
+                                                              sample_info_tfdel$genotype == "WT",],
+                                 .info3 = sample_info_tfdel[sample_info_tfdel$organism == "cer" &
+                                                              sample_info_tfdel$genotype == paste0(.tf, "delete"),],
+                                 .info4 = sample_info_tfdel[sample_info_tfdel$organism == "par" &
+                                                              sample_info_tfdel$genotype == paste0(.tf, "delete"),],
+                                 .normalization = .normalization, .plotlims = .plotlims)
+  }
+  if (.parents_or_hybrid == "hybrid" & !.single_genes) {
+    p <- plotSingleProfilesTFdel(.cts1 = counts_tfdel_allele[.gene_idxs,
+                                                             sample_info_tfdel_allele$allele == "cer" &
+                                                               sample_info_tfdel_allele$genotype == "WT",
+                                                             drop = FALSE],
+                                 .cts2 = counts_tfdel_allele[.gene_idxs,
+                                                             sample_info_tfdel_allele$allele == "par" &
+                                                               sample_info_tfdel_allele$genotype == "WT",
+                                                             drop = FALSE],
+                                 .cts3 = counts_tfdel_allele[.gene_idxs,
+                                                             sample_info_tfdel_allele$allele == "cer" &
+                                                               sample_info_tfdel_allele$genotype == paste0(.tf, "delete"),
+                                                             drop = FALSE],
+                                 .cts4 = counts_tfdel_allele[.gene_idxs,
+                                                             sample_info_tfdel_allele$allele == "par" &
+                                                               sample_info_tfdel_allele$genotype == paste0(.tf, "delete"),
+                                                             drop = FALSE],
+                                 .info1 = sample_info_tfdel_allele[sample_info_tfdel_allele$allele == "cer" &
+                                                                     sample_info_tfdel_allele$genotype == "WT",],
+                                 .info2 = sample_info_tfdel_allele[sample_info_tfdel_allele$allele == "par" &
+                                                                     sample_info_tfdel_allele$genotype == "WT",],
+                                 .info3 = sample_info_tfdel_allele[sample_info_tfdel_allele$allele == "cer" &
+                                                                     sample_info_tfdel_allele$genotype == paste0(.tf, "delete"),],
+                                 .info4 = sample_info_tfdel_allele[sample_info_tfdel_allele$allele == "par" &
+                                                                     sample_info_tfdel_allele$genotype == paste0(.tf, "delete"),],
+                                 .normalization = .normalization, .plotlims = .plotlims)
   }
   return(p)
 }
+# # test for plotGenesTFdel
+# gene_idxs <- c("YBR163W", "YBR265W", "YGL048C", "YGR101W", "YJL085W", "YLR085C", "YLR118C",
+#                "YLR274W", "YLR283W", "YOR047C", "YOR201C", "YOR315W", "YPR105C", "YPR129W",
+#                "YPR198W")
+# plotGenesTFdel(.tf = "GCR2", .gene_idxs = gene_idxs)
+# plotGenesTFdel(.tf = "GCR2", .gene_idxs = gene_idxs, .single_genes = TRUE)
 
 # Upset plot
 # given a group name, which must be a column in .df,
@@ -1154,7 +1684,8 @@ plotGenesTFdel <- function(.gene_idxs, .tf, .parents_or_hybrid = "parents") {
 # items in the group, other column names in .df (usually gene names, but can be gene-effect-TF combos if organism is group)
 # creates an upset plot (3+ group Venn diagram) 
 # which enumerates which combinations of groups share how many items
-makeUpsetPlot <- function(.df, .group_name, .group_members, .item_names) {
+makeUpsetPlot <- function(.df, .group_name, .group_members, .item_names,
+                          .min_comb_size = 5) {
   lt <- vector(mode = "list", length = 0)
   for (grpmem in .group_members) {
     lt[[grpmem]] <- filter(.df, .data[[.group_name]] == grpmem)
@@ -1163,6 +1694,7 @@ makeUpsetPlot <- function(.df, .group_name, .group_members, .item_names) {
     map(.f = select, .item_names) |> 
     map(.f = \(x) {purrr::reduce(x, .f = paste0)})
   plotdf <- make_comb_mat(lt)
+  plotdf <- plotdf[,comb_size(plotdf) >= .min_comb_size]
   p <- UpSet(plotdf, 
              set_order = .group_members,
              comb_order = order(comb_size(plotdf)),
@@ -1175,11 +1707,11 @@ makeUpsetPlot <- function(.df, .group_name, .group_members, .item_names) {
                annotation_name_side = "left", 
                annotation_name_rot = 90))
   draw(p)
-  decorate_annotation("number of genes", {
+  suppressWarnings(decorate_annotation("number of genes", {
     grid.text(comb_size(plotdf)[column_order(p)], x = seq_along(comb_size(plotdf)), y = unit(comb_size(plotdf)[column_order(p)], "native") + unit(2, "pt"), 
               default.units = "native", just = c("left", "bottom"), 
               gp = gpar(fontsize = 6, col = "#404040"), rot = 45)
-  })
+  }))
 }
 # # tests for makeUpsetPlot
 # # TF example within on organism
@@ -1189,41 +1721,85 @@ makeUpsetPlot <- function(.df, .group_name, .group_members, .item_names) {
 #               .group_members = c("GAT1", "URE2", "GLN3"),
 #               .item_names = "gene_name")
 # # organism venn diagram of sharing gene-TF-effect items
-# makeUpsetPlot(.df = effectdf, 
-#               .group_name = "organism", 
+# makeUpsetPlot(.df = effectdf,
+#               .group_name = "organism",
 #               .group_members = c("cer", "par", "hyc", "hyp"),
 #               .item_names = c("gene_name", "deletion", "effect"))
 
-# Upset plot of how many effects are shared between species/hybrid alleles
-# ComplexHeatmap::UpSet needs a list of same length of number of groups (in our case 4 groups: cer, par, hyc, hyp)
-# each element of the list is a vectors of objects (in our case, paste0(gene name, tf, effect))
-# UpSet checks for each vector element in each list element
-makeEffectsUpset <- function(.tf = TFnames, .effect = c("level", "dynamics")) {
-  lt <- list(cer = filter(effectdf, effect %in% .effect & organism == "cer" & deletion %in% .tf),
-             par = filter(effectdf, effect %in% .effect & organism == "par" & deletion %in% .tf),
-             hyc = filter(effectdf, effect %in% .effect & organism == "hyc" & deletion %in% .tf),
-             hyp = filter(effectdf, effect %in% .effect & organism == "hyp" & deletion %in% .tf)) |> 
-    map(.f = mutate, gene_tf_eff = paste0(gene_name, deletion, effect)) |> 
-    map(.f = select, gene_tf_eff) |> 
-    map(.f = pull)
-  plotdf <- make_comb_mat(lt)
-  p <- UpSet(plotdf, 
-             set_order = c("cer", "par", "hyc", "hyp"),
-             comb_order = order(comb_size(plotdf)), # this, I will say, makes ggplot look like a freakin' dream. I literally just wanted to rename the histogram y axis and add counts to the top of the bars
-             top_annotation = HeatmapAnnotation( 
-               "number of genes" = anno_barplot(comb_size(plotdf), 
-                                                ylim = c(0, max(comb_size(plotdf))*1.1),
-                                                border = FALSE, 
-                                                gp = gpar(fill = "black"), 
-                                                height = unit(4, "cm")), 
-               annotation_name_side = "left", 
-               annotation_name_rot = 90))
-  draw(p)
-  decorate_annotation("number of genes", {
-    grid.text(comb_size(plotdf)[column_order(p)], x = seq_along(comb_size(plotdf)), y = unit(comb_size(plotdf)[column_order(p)], "native") + unit(2, "pt"), 
-              default.units = "native", just = c("left", "bottom"), 
-              gp = gpar(fontsize = 6, col = "#404040"), rot = 45)
-  })
+# makes heatmap where rows are TF deletions, columns are groups,
+# and counts are the number of significant effects
+# @input: .df: dataframe with columns lfc, padj, deletion, gene_name, and grouping columns
+# .groups: character vector of names of grouping columns
+# @output: heatmap, through print function
+# Note: groups should be in order from last-to-vary to first-to-vary.
+# For example, if you have two groups: dynamics (cons, div) 
+# and organism (cer, par), giving .groups = c("organism", "dynamics)
+# would order columns left to right: cer_cons, cer_div, par_cons, par_div
+makeGeneGroupHeatmap <- function(.df, .tf_order,
+                                 .groups,
+                                 .col_fun = colorRamp2(c(0, 10, 30, 100), c("blue", "yellow", "red", "magenta")),
+                                 .legend = FALSE,
+                                 .title = NULL) {
+  griddf <- select(.df, c("deletion", .groups)) |> 
+    filter(deletion %in% .tf_order) |>
+    unique() |>
+    select(-deletion) |> 
+    expand_grid(deletion = .tf_order) |>
+    unique() |> 
+    arrange(across(.groups))
+  effectsdf <- .df |> 
+    filter(deletion %in% .tf_order) |> 
+    group_by(across(all_of(c("deletion", .groups)))) |> 
+    summarise(nGenes = sum(padj < p_thresh))
+  plotdf <- left_join(griddf, effectsdf, by = colnames(griddf)) |> 
+    mutate(nGenes = if_else(is.na(nGenes),
+                            true = 0,
+                            false = nGenes)) |> # group_by/summarise drops groups without any counts, and at the time of this code drop=FALSE wasn't implemented
+    pivot_wider(id_cols = "deletion",
+                names_from = .groups,
+                values_from = "nGenes") |>
+    ungroup()
+  effects_mat <- plotdf |> select(-deletion) |> as.matrix()
+  rownames(effects_mat) <- plotdf$deletion
+  effects_mat <- effects_mat[rownames(effects_mat) %in% .tf_order,]
+  Heatmap(effects_mat, col = .col_fun, na_col = "grey80",
+          row_order = .tf_order,
+          show_heatmap_legend = .legend,
+          column_title = .title,
+          column_order = colnames(effects_mat),
+          cell_fun = function(j, i, x, y, width, height, fill) {
+            output <- if_else(!(is.na(effects_mat[i, j])), 
+                              true = as.character(effects_mat[i, j]), 
+                              false = "-")
+            grid.text(output, x, y, gp = gpar(fontsize = 10))
+          })
+}
+# # tests for makeGeneGroupHeatmap
+# # conserved TF effects TP1
+# makeGeneGroupHeatmap(.df = filter(TFdeldf, 
+#                                   tf_effect_conserved == TRUE &
+#                                     timepoint == "TP1" &
+#                                     organism %in% c("cer", "par")),
+#                      .tf_order = tf_order,
+#                      .groups = c("dynamics", "cer", "par", "lfc_sign", "organism"))
+# # QC check that effects match what is seen in the heatmap:
+# filter(TFdeldf, 
+#        tf_effect_conserved == TRUE &
+#          timepoint == "TP1" &
+#          organism %in% c("cer", "par") &
+#          cer == "0" & par == "0" & lfc_sign == -1 &
+#          deletion == "GLN3") |> 
+#   group_by(organism) |> summarise(nGenes = sum(padj < p_thresh))
+
+# basic volcano plot to compare power
+makeVolcanoPlot <- function(.tfdeldf, .tf, .org, .timepoint) {
+  plotdf <- .tfdeldf |> filter(organism == .org &
+                                 timepoint == .timepoint &
+                                 deletion == .tf)
+  ggplot(plotdf, aes(x = lfc, y = -log10(pval))) +
+    geom_point(aes(color = padj < p_thresh)) +
+    ylim(c(0, 15)) +
+    xlim(c(-5, 5))
 }
 #### Gene Ontology Enrichment ####
 getGOSlimDf <- function(.idxs, .group_name, .file_prefix = "gene_ontology/results/",

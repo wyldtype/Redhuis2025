@@ -1,6 +1,6 @@
 sapply(c("tidyr", "dplyr", "readr", "purrr", "ggplot2", "ggbeeswarm"), require, character.only=TRUE)
 library(MASS, include.only = "glm.nb")
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2024/")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025/")
 source("functions_for_figure_scripts.R")
 load("data_files/GLM_Counts.RData")
 ExperimentNames <- c("CC", "HAP4", "LowN", "LowPi", "Heat", "Cold")
@@ -414,112 +414,115 @@ spaldf %>% filter(gene_name == gene_idx)
 # but we want to draw a threshold beyond which we are fairly certain that the gene is truly diverged
 # and use genes beyond that threshold as a SAMPLE of diverged genes to ask if there's anything unique about them
 p_thresh <- 0.05/(nrow(spcts[[1]])*6) # correcting for multiple tests: 6 experiments + the full model
-eff_thresh <- 1 
+# eff_thresh <- 1 
 
 # Volcano plot
-ggplot(spaldf, aes(x = effect_size, y = -log(pvalue))) + 
-  geom_point(aes(color = abs(effect_size) > eff_thresh & pvalue < p_thresh)) +
-  theme(legend.position = "none") + geom_vline(xintercept = c(-1, 1), color = "gold")
-
-# Identifying all the genes that are totally off in one allele and on in the other
-higheffectgenes <- spdf %>% 
-  arrange(desc(abs(effect_size))) %>% 
-  filter(pvalue < 0.05) %>% 
-  select(gene_name) |> 
-  slice(1:500) |> 
-  pull() |> 
-  unique()
-generatePlotlist <- function(.gene_names) {
-  plotlist <- vector(mode = "list", length = 2*length(.gene_names))
-  names(plotlist) <- sapply(.gene_names, rep, 2) %>% as.character() %>% paste(c("parents", "hybrid"), sep = "_")
-  for (g in .gene_names) {
-    cat(g, which(.gene_names == g), "/", length(.gene_names), "\n")
-    g_experiments <- intersect(ExperimentNames[unlist(map(ExperimentNames, \(x) g %in% rownames(spcts[[x]])))],
-                               ExperimentNames[unlist(map(ExperimentNames, \(x) g %in% rownames(alcts[[x]])))])
-    if (length(g_experiments) == 0) { # if there are no common experiments between parents and hybrids
-      next
-    }
-    plotlist[[paste(g, "parents", sep = "_")]] <- getGeneDf(g, .mode = "parents", .experiment = g_experiments) |> 
-      visualizeGeneExpressionScatterplot(.plotname = paste(g, "parents", sep = " - "))
-    plotlist[[paste(g, "hybrid", sep = "_")]] <- getGeneDf(g, .mode = "hybrid", .experiment = g_experiments) %>%
-      visualizeGeneExpressionScatterplot(.plotname = paste(g, "hybrid", sep = " - "))
-  }
-  return(plotlist)
-}
-plotlist <- generatePlotlist(higheffectgenes)
-
-# visualize (12 plots per figure is ideal, adjust exact number of figures as needed)
-ggarrange(plotlist = plotlist[c(1:12)], common.legend = TRUE)
-ggarrange(plotlist = plotlist[c(13:24)], common.legend = TRUE)
-ggarrange(plotlist = plotlist[c(25:36)], common.legend = TRUE)
-ggarrange(plotlist = plotlist[c(37:48)], common.legend = TRUE) 
-ggarrange(plotlist = plotlist[c(49:60)], common.legend = TRUE)
-ggarrange(plotlist = plotlist[c(61:72)], common.legend = TRUE) 
-ggarrange(plotlist = plotlist[c(73:84)], common.legend = TRUE)
-ggarrange(plotlist = plotlist[c(85:96)], common.legend = TRUE)
-ggarrange(plotlist = plotlist[c(97:108)], common.legend = TRUE)
-ggarrange(plotlist = plotlist[c(109:120)], common.legend = TRUE) 
-ggarrange(plotlist = plotlist[c(121:132)], common.legend = TRUE) 
-# fairly arbitrary end, just when it starts looking like the genes aren't that dramatically differentially expressed anymore
-
-# creating manual lists of off-on genes in parents and hybrid based on above plots
-offongenes_parentsandhybrids <- c(setdiff(higheffectgenes[1:96], 
-                                          c("YCR097W", "YHR136C", "YEL073C", "YLR303W", 
-                                            "YPL209C", "YIR019C", "YGR224W", "YOL152W",
-                                            "YFL014W", "YGL256W", "YGR213C")), # first ~100 plots
-                                  "YKL218C", "YBR189W", "YOL158C", "YCL018W", "YFR055W", "YPR194C",
-                                  "YCR063W", "YIL087C", "YER046W", "YBR072W", "YDR363W", "YJL217W",
-                                  "YJL011C", "YDR448W", "YNL063W")
-offongenes_parentsonly <- c("YIL121W", "YFL014W", "YIR019C", "YGR224W", "YGL256W")
-offongenes_hybridsonly <- c("YCR097W", "YLR303W")
-
-# presumably trans-based off-on (parents only)
-plotlist <- generatePlotlist(offongenes_parentsonly)
-ggarrange(plotlist = plotlist[c(1:(2*length(offongenes_parentsonly)))], common.legend = TRUE) 
-
-# presumably some sort of interaction in hybrid (hybrid only)
-plotlist <- generatePlotlist(offongenes_hybridsonly)
-ggarrange(plotlist = plotlist[c(1:4)], common.legend = TRUE) 
+library(ggExtra)
+ggMarginal(ggplot(spaldf, aes(x = effect_size, y = -log(pvalue))) + 
+  geom_point(aes(color = pvalue < p_thresh)) +
+  theme(legend.position = "none") + geom_vline(xintercept = c(-1, 1), color = "gold"),
+  margins = "both", groupColour = TRUE, groupFill = TRUE)
 
 # creating genedf, where each row is one gene
-genedf <-  spaldf %>% 
+genedf <-  spaldf %>%
   pivot_wider(names_from = c("experiment", "coefficient"), values_from = c("effect_size", "pvalue"), id_cols = c("gene_name"))
 table(genedf$gene_name) %>% table() # checking that every gene is only represented once
 
-# QC: how often are all significant effect sizes (all experimental conditions x 2 species/allele = max 10) in the same direction?
-# For each gene, check if all its sig experiments are in the same direction
-siggenes <- spaldf %>% filter(pvalue < 1e-5 & abs(effect_size) > 1) %>% select(gene_name) %>% pull() %>% unique()
-same_dir_df <- tibble(gene_name = siggenes,
-                      prop_same_dir = sapply(siggenes, \(g) {
-                        gdf <- filter(spaldf, gene_name == g & pvalue < 1e-5 & abs(effect_size) > 1)
-                        return(max(sum(sign(gdf$effect_size) == 1), sum(sign(gdf$effect_size) == -1))/nrow(gdf))
-                      }),
-                      avg_effect_magnitude = sapply(siggenes, \(g) {
-                        gdf <- filter(spaldf, gene_name == g & pvalue < 1e-5 & abs(effect_size) > 1)
-                        return(mean(abs(gdf$effect_size)))
-                      }))
-ggplot(same_dir_df, aes(x = log(avg_effect_magnitude), y = prop_same_dir)) + geom_point() 
-table(same_dir_df$prop_same_dir == 1) # vast majority are same direction
-# Or version where we don't threshold at all: check if as effect size increases, if the estimates start being more likely to be in the same direction
-GeneNames <- spaldf$gene_name %>% unique()
-same_dir_df <- tibble(gene_name = GeneNames,
-                      prop_same_dir = sapply(GeneNames, \(g) {
-                        gdf <- filter(spaldf, gene_name == g)
-                        return(max(sum(sign(gdf$effect_size) == 1), sum(sign(gdf$effect_size) == -1))/nrow(gdf))
-                      }),
-                      avg_effect_magnitude = sapply(GeneNames, \(g) {
-                        gdf <- filter(spaldf, gene_name == g)
-                        return(mean(abs(gdf$effect_size)))
-                      }))
-ggplot(same_dir_df, aes(y = log(avg_effect_magnitude), 
-                        x = round(prop_same_dir, digits = 1))) + geom_quasirandom() # as the effect size increases, the gene is more likely to have effect in the same direction in all experiments
-table(round(same_dir_df$prop_same_dir, digits = 1))
-
+#### Saving ####
 # finished QC, exporting for use in Figure scripts and network construction
 save(spcts, spinfo, alcts, alinfo, spaldf, genedf, file = "data_files/single_gene_models.RData")
 load(file = "data_files/single_gene_models.RData")
 
-###################### Archive ########################
+####################### Archive ########################
+#### Identifying all the genes that are totally off in one allele and on in the other ####
+# higheffectgenes <- spdf %>% 
+#   arrange(desc(abs(effect_size))) %>% 
+#   filter(pvalue < 0.05) %>% 
+#   select(gene_name) |> 
+#   slice(1:500) |> 
+#   pull() |> 
+#   unique()
+# generatePlotlist <- function(.gene_names) {
+#   plotlist <- vector(mode = "list", length = 2*length(.gene_names))
+#   names(plotlist) <- sapply(.gene_names, rep, 2) %>% as.character() %>% paste(c("parents", "hybrid"), sep = "_")
+#   for (g in .gene_names) {
+#     cat(g, which(.gene_names == g), "/", length(.gene_names), "\n")
+#     g_experiments <- intersect(ExperimentNames[unlist(map(ExperimentNames, \(x) g %in% rownames(spcts[[x]])))],
+#                                ExperimentNames[unlist(map(ExperimentNames, \(x) g %in% rownames(alcts[[x]])))])
+#     if (length(g_experiments) == 0) { # if there are no common experiments between parents and hybrids
+#       next
+#     }
+#     plotlist[[paste(g, "parents", sep = "_")]] <- getGeneDf(g, .mode = "parents", .experiment = g_experiments) |> 
+#       visualizeGeneExpressionScatterplot(.plotname = paste(g, "parents", sep = " - "))
+#     plotlist[[paste(g, "hybrid", sep = "_")]] <- getGeneDf(g, .mode = "hybrid", .experiment = g_experiments) %>%
+#       visualizeGeneExpressionScatterplot(.plotname = paste(g, "hybrid", sep = " - "))
+#   }
+#   return(plotlist)
+# }
+# plotlist <- generatePlotlist(higheffectgenes)
+# 
+# # visualize (12 plots per figure is ideal, adjust exact number of figures as needed)
+# ggarrange(plotlist = plotlist[c(1:12)], common.legend = TRUE)
+# ggarrange(plotlist = plotlist[c(13:24)], common.legend = TRUE)
+# ggarrange(plotlist = plotlist[c(25:36)], common.legend = TRUE)
+# ggarrange(plotlist = plotlist[c(37:48)], common.legend = TRUE) 
+# ggarrange(plotlist = plotlist[c(49:60)], common.legend = TRUE)
+# ggarrange(plotlist = plotlist[c(61:72)], common.legend = TRUE) 
+# ggarrange(plotlist = plotlist[c(73:84)], common.legend = TRUE)
+# ggarrange(plotlist = plotlist[c(85:96)], common.legend = TRUE)
+# ggarrange(plotlist = plotlist[c(97:108)], common.legend = TRUE)
+# ggarrange(plotlist = plotlist[c(109:120)], common.legend = TRUE) 
+# ggarrange(plotlist = plotlist[c(121:132)], common.legend = TRUE) 
+# # fairly arbitrary end, just when it starts looking like the genes aren't that dramatically differentially expressed anymore
+# 
+# # creating manual lists of off-on genes in parents and hybrid based on above plots
+# offongenes_parentsandhybrids <- c(setdiff(higheffectgenes[1:96], 
+#                                           c("YCR097W", "YHR136C", "YEL073C", "YLR303W", 
+#                                             "YPL209C", "YIR019C", "YGR224W", "YOL152W",
+#                                             "YFL014W", "YGL256W", "YGR213C")), # first ~100 plots
+#                                   "YKL218C", "YBR189W", "YOL158C", "YCL018W", "YFR055W", "YPR194C",
+#                                   "YCR063W", "YIL087C", "YER046W", "YBR072W", "YDR363W", "YJL217W",
+#                                   "YJL011C", "YDR448W", "YNL063W")
+# offongenes_parentsonly <- c("YIL121W", "YFL014W", "YIR019C", "YGR224W", "YGL256W")
+# offongenes_hybridsonly <- c("YCR097W", "YLR303W")
+# 
+# # presumably trans-based off-on (parents only)
+# plotlist <- generatePlotlist(offongenes_parentsonly)
+# ggarrange(plotlist = plotlist[c(1:(2*length(offongenes_parentsonly)))], common.legend = TRUE) 
+# 
+# # presumably some sort of interaction in hybrid (hybrid only)
+# plotlist <- generatePlotlist(offongenes_hybridsonly)
+# ggarrange(plotlist = plotlist[c(1:4)], common.legend = TRUE) 
+# 
+# # QC: how often are all significant effect sizes (all experimental conditions x 2 species/allele = max 10) in the same direction?
+# # For each gene, check if all its sig experiments are in the same direction
+# siggenes <- spaldf %>% filter(pvalue < 1e-5 & abs(effect_size) > 1) %>% select(gene_name) %>% pull() %>% unique()
+# same_dir_df <- tibble(gene_name = siggenes,
+#                       prop_same_dir = sapply(siggenes, \(g) {
+#                         gdf <- filter(spaldf, gene_name == g & pvalue < 1e-5 & abs(effect_size) > 1)
+#                         return(max(sum(sign(gdf$effect_size) == 1), sum(sign(gdf$effect_size) == -1))/nrow(gdf))
+#                       }),
+#                       avg_effect_magnitude = sapply(siggenes, \(g) {
+#                         gdf <- filter(spaldf, gene_name == g & pvalue < 1e-5 & abs(effect_size) > 1)
+#                         return(mean(abs(gdf$effect_size)))
+#                       }))
+# ggplot(same_dir_df, aes(x = log(avg_effect_magnitude), y = prop_same_dir)) + geom_point() 
+# table(same_dir_df$prop_same_dir == 1) # vast majority are same direction
+# # Or version where we don't threshold at all: check if as effect size increases, if the estimates start being more likely to be in the same direction
+# GeneNames <- spaldf$gene_name %>% unique()
+# same_dir_df <- tibble(gene_name = GeneNames,
+#                       prop_same_dir = sapply(GeneNames, \(g) {
+#                         gdf <- filter(spaldf, gene_name == g)
+#                         return(max(sum(sign(gdf$effect_size) == 1), sum(sign(gdf$effect_size) == -1))/nrow(gdf))
+#                       }),
+#                       avg_effect_magnitude = sapply(GeneNames, \(g) {
+#                         gdf <- filter(spaldf, gene_name == g)
+#                         return(mean(abs(gdf$effect_size)))
+#                       }))
+# ggplot(same_dir_df, aes(y = log(avg_effect_magnitude), 
+#                         x = round(prop_same_dir, digits = 1))) + geom_quasirandom() # as the effect size increases, the gene is more likely to have effect in the same direction in all experiments
+# table(round(same_dir_df$prop_same_dir, digits = 1))
+
 #### all experiments in one, full model ####
 # archived b/c we're purposefully looking at if lfc is consistent across all experiments,
 # we don't have any use for a filter for genes that have consistent lfc
