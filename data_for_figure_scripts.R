@@ -1,7 +1,7 @@
 sapply(c("dplyr", "purrr", "tidyr", "ggpubr", "readr",
          "data.table", "ggplot2", "data.table", "msir", 
          "WGCNA", "energy", "matrixStats"), require, character.only=TRUE)
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025/")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/aligning_the_molecular_phenotype/Redhuis2025/")
 source("functions_for_figure_scripts.R")
 
 #### Reading in Count Data ####
