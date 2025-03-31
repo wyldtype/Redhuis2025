@@ -141,7 +141,7 @@ ggplot(filter(plotdf, gene %in% sample_genes),
        aes(x = gene, y = pct_cer)) + 
   geom_point(aes(color = organism))
 
-# Do any cer/par samples have many incorrect gene mappings?
+### Do any cer/par samples have many incorrect gene mappings?
 sampdf <- plotdf |> filter(organism %in% c("cerSample", "parSample")) |> 
   group_by(sample_name, organism) |> 
   summarise(avg_pct_cer = mean(pct_cer, na.rm = TRUE))
@@ -342,7 +342,8 @@ sampdf <- fay_sampdf |>
   dplyr::rename("sample_name" = "Sample") |> 
   right_join(sampdf, by = c("sample_name", "allele"))
 ggplot(sampdf, aes(x = lib_size_fay, y = lib_size)) +
-  geom_point(aes(color = allele, shape = read))
+  geom_point(aes(color = allele, shape = read)) +
+  geom_abline(slope = 1, intercept = 0)
 # highly correlated with fay alignment, R^2 > 0.99
 lm(lib_size ~ lib_size_fay, data = sampdf) |> summary()
 

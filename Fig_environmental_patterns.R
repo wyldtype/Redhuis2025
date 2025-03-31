@@ -94,6 +94,85 @@ plotdf <- expand_grid(experiment = unique(finaldf$experiment),
 sort(table(plotdf$code_cer), decreasing = TRUE)[1:30]
 sort(table(plotdf$code_par), decreasing = TRUE)[1:30]
 
+#### Dynamics-divergers have higher expression in decreasing species at TP0 ####
+# Rationale: In order for genes to have switched from increasing to decreasing,
+# they must have higher or smaller expression difference at TP0
+
+# example gene first, 2-1 HAP4
+gene_idx <- finaldf |> filter(experiment == "HAP4" & 
+                                level == "conserved" &
+                                cer == 2 & par == 1) |> 
+  select(gene_name) |> pull() |> sample(1)
+plotEnvironments(.gene_idxs = "YMR221C") # first example we found, strong CC level divergence
+plotEnvironments(.gene_idxs = gene_idx)
+
+# Figure: dynamics-diverging genes have higher expression at TP0 in decreasing species
+plotdf <- finaldf |> filter(dynamics == "diverged" &
+                              level == "conserved" & 
+                              cer %in% c(1, 2) & 
+                              par %in% c(1, 2)) |> 
+  mutate("decreasing_species" = if_else(cer == 1,
+                                        true = "par",
+                                        false = "cer")) |> 
+  select(gene_name, experiment, cer, par, decreasing_species)
+# ...in environment they were diverging in dynamics in:
+getTP0AvgExpr <- function(.gene_name, .experiment, .organism) {
+  if (.organism == "cer") {
+    cts_mat <- collapsed$cer
+    info_df <- info
+  }
+  if (.organism == "par") {
+    cts_mat <- collapsed$par
+    info_df <- info
+  }
+  tp0_condition <- info_df |> filter(experiment == .experiment) |> 
+    filter(time_point_num == min(time_point_num)) |> 
+    select(condition) |> pull()
+  mean_expr <- cts_mat[.gene_name, tp0_condition] |> mean()
+  return(mean_expr)
+}
+plotdf$tp0_avgExpr_decreasing_species <- map(c(1:nrow(plotdf)), .f = \(i) {
+  getTP0AvgExpr(plotdf$gene_name[i],
+                .experiment = plotdf$experiment[i],
+                .organism = plotdf$decreasing_species[i])
+}) |> unlist()
+plotdf$tp0_avgExpr_increasing_species <- map(c(1:nrow(plotdf)), .f = \(i) {
+  getTP0AvgExpr(plotdf$gene_name[i],
+                .experiment = plotdf$experiment[i],
+                .organism = setdiff(c("cer", "par"), plotdf$decreasing_species[i]))
+}) |> unlist()
+plotdf$lower_in_increasing_species <- plotdf$tp0_avgExpr_increasing_species < plotdf$tp0_avgExpr_decreasing_species
+# ...in all environments:
+p_tp0 <- ggplot(pivot_longer(plotdf, cols = c("tp0_avgExpr_decreasing_species",
+                                     "tp0_avgExpr_increasing_species"),
+                    names_to = "decreasing_or_increasing",
+                    values_to = "tp0_avgExpr"), 
+       aes(x = decreasing_or_increasing, 
+           y = log2(tp0_avgExpr))) +
+  geom_line(aes(group = gene_name,
+                color = lower_in_increasing_species)) +
+  facet_grid(~experiment + lower_in_increasing_species) +
+  theme(axis.text.x = element_blank()) +
+  ggtitle("decreasing species has higher expression at timepoint 0\n(in all environments except Cold and Cell Cycle)")
+# True except for CC and Cold (where clusters 1 and 2 don't separate increasing/decreasing genes)
+
+# ...level divergence in CC:
+plotdf <- left_join(plotdf, y = finaldf |> 
+                      filter(experiment == "CC") |> 
+                      select(gene_name, effect_size_species, level),
+                    by = "gene_name", relationship = "many-to-one")
+p_cc <- ggplot(plotdf, aes(x = lower_in_increasing_species, 
+                   y = effect_size_species)) +
+  geom_boxplot(aes(color = decreasing_species)) +
+  facet_wrap(~experiment) +
+  ggtitle("decreasing species has higher expression level across Cell Cycle \n(in all environments except Cold and Cell Cycle)")
+### Supplementary figure: decreasing species has higher expression in standard lab conditions
+pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/decreasing_vs_increasing_dynamics_at_tp0.pdf",
+    width = 12, height = 8)
+ggarrange(p_tp0, p_cc, nrow = 2, ncol = 1)
+dev.off()
+# TODO: if you end up using this, add counts above each barplot and line group
+
 #### Heatmap-type quantification of dynamics divergence in each environment #### 
 
 # Y axis: environment those 2-1 or 1-2 divergers were ID'd in
@@ -436,6 +515,78 @@ Heatmap(plot_mat, col = col_fun,
           grid.text(sprintf("%.2f", plot_mat[i, j]), x, y, gp = gpar(fontsize = 10))
         })
 dev.off()
+
+#### 10% Highest cor vs 10% lowest cor in each environment ####
+
+# we've confirmed that dynamics divergence in one environment doesn't predict
+# dynamics divergence in others. But is the opposite true?
+# Do genes with strong correlation in one environment have divergent dynamics
+# in another?
+# The Pho4 regulon in LowPi with divergent dynamics in HAP4 is our best example of this
+
+# Top n most correlated
+nGenes <- 500
+plotlist <- vector(mode = "list", length = length(ExperimentNames))
+names(plotlist) <- ExperimentNames
+for (e in ExperimentNames) {
+  top_table <- finaldf |> filter(experiment == e & cer != 0 & par != 0) |> 
+    mutate(cor_rank = rank(-cor_parents)) |> 
+    filter(cor_rank <= nGenes) |> select(cer, par) |> table()
+  max_table <- which(top_table == max(top_table), arr.ind = TRUE)
+  cer_clust <- colnames(top_table)[as.numeric(max_table[1, 1])]
+  par_clust <- colnames(top_table)[as.numeric(max_table[1, 2])]
+  top_gene_idxs <- finaldf |> filter(experiment == e & cer != 0 & par != 0) |> 
+    mutate(cor_rank = rank(-cor_parents)) |> 
+    filter(cor_rank <= nGenes & cer == cer_clust & par == par_clust) |> # just plotting the subset from the most represented cluster
+    select(gene_name) |> pull()
+  plotlist[[e]] <- annotate_figure(plotEnvironments(.gene_idxs = top_gene_idxs,
+                                                    .normalization = "scale"),
+                                   top = paste(e, length(top_gene_idxs), "genes"))
+}
+pdf(file = paste0("../../aligning_the_molecular_phenotype/paper_figures/Supplement/top", nGenes, ".pdf"),
+    width = 10, height = 10)
+ggarrange(plotlist = plotlist, 
+          nrow = length(ExperimentNames), ncol = 1,
+          common.legend = TRUE)
+dev.off()
+
+# TODO: Bottom nGenes least correlated
+plotlist <- vector(mode = "list", length = length(ExperimentNames))
+names(plotlist) <- ExperimentNames
+for (e in ExperimentNames) {
+  bottom_table <- finaldf |> filter(experiment == e & cer != 0 & par != 0) |> 
+    mutate(cor_rank = rank(cor_parents)) |> 
+    filter(cor_rank <= nGenes) |> select(cer, par) |> table()
+  max_table <- which(bottom_table == max(bottom_table), arr.ind = TRUE)
+  cer_clust <- colnames(bottom_table)[as.numeric(max_table[1, 1])]
+  par_clust <- colnames(bottom_table)[as.numeric(max_table[1, 2])]
+  bottom_gene_idxs <- finaldf |> filter(experiment == e & cer != 0 & par != 0) |> 
+    mutate(cor_rank = rank(cor_parents)) |> 
+    filter(cor_rank <= nGenes & cer == cer_clust & par == par_clust) |> # just plotting the subset from the most represented cluster
+    select(gene_name) |> pull()
+  plotlist[[e]] <- annotate_figure(plotEnvironments(.gene_idxs = bottom_gene_idxs,
+                                                    .normalization = "scale"),
+                                   top = paste(e, length(bottom_gene_idxs), "genes"))
+}
+pdf(file = paste0("../../aligning_the_molecular_phenotype/paper_figures/Supplement/bottom", nGenes, ".pdf"),
+    width = 10, height = 10)
+ggarrange(plotlist = plotlist, 
+          nrow = length(ExperimentNames), ncol = 1,
+          common.legend = TRUE)
+dev.off()
+
+# TODO: these plots still suffer from the fact that most genes aren't still in the same cluster
+# together in a different environment. So divergent dynamics in other environments is potentially
+# masked by divergence in different directions. Couple things to try:
+# 1) Screen each pair of environments for a paucity or enrichment of dynamics divergers:
+#    First environment is "identified in" environment, where you select top nGenes most correlated btwn species genes
+#    Second environment is "measured in" environment, where you check what percent of those genes are 
+#    dynamics divergers versus the remaining genes in the genome to see  which pairs of environments
+#    have the most different percents, paucity or enrichment
+# 2) Plot these paired sets of environments. The idea is that if genes are related in two environments,
+#    they're probably related enough in the remaining environments and further dissecting can actually
+#    obscure patterns
+# 3) Instead of having the "measured in" be % dynamics divergers, it could be parental cor
 
 #### Probably Archive: Heatmaps of pct dynamics and level divergers ####
 # probably archive b/c
@@ -921,7 +1072,13 @@ plotExpressionProfilePair(.cts1 = collapsed$cer[gene_idxs,],
                           .normalization = "log2")
 dev.off()
 
-
+#### Does the most conserved/correlated/variable subset of each environment have more divergent expression in other environments? ####
+# TODO: see if we can sidestep the yeastract and just take the most strongly
+# co-regulated subset of each environmental cluster and look at their dynamics
+# in other environments compared to the rest of that cluster
+plotCoRegGroup <- function(.environment, .clust, .pct = 0.1) {
+  
+}
 
 ############################## Archive ######################################
 # #### Probably Archive from here on down: Level and dynamics divergers only retain level divergence across environments ####

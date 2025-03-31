@@ -215,45 +215,6 @@ pdf(file = paste0("../../aligning_the_molecular_phenotype/paper_figures/CisTrans
 p_bar
 dev.off()
 
-#### Calculating ortholog correlations ####
-getCorelation <- function(.gene_name, .experiment, 
-                          .cts1, .cts2, .info1, .info2) {
-  common_cols <- intersect(colnames(.cts1[,.info1$experiment == .experiment]), 
-                           colnames(.cts2[,.info2$experiment == .experiment]))
-  output <- cor(as.numeric(.cts1[.gene_name, common_cols]),
-                as.numeric(.cts2[.gene_name, common_cols]))
-  return(as.numeric(output))
-}
-# tests for getCorelation
-getCorelation("YGR192C", "LowN",
-              .cts1 = collapsed$cer,
-              .cts2 = collapsed$par,
-              .info1 = info,
-              .info2 = info)
-
-
-# adding corelation columns
-finaldf$cor_hybrid <- map2(finaldf$gene_name, finaldf$experiment, getCorelation,
-                           .cts1 = collapsed_allele$cer,
-                           .cts2 = collapsed_allele$par,
-                           .info1 = info_allele,
-                           .info2 = info_allele) |> unlist()
-finaldf$cor_parents <- map2(finaldf$gene_name, finaldf$experiment, getCorelation,
-                            .cts1 = collapsed$cer,
-                            .cts2 = collapsed$par,
-                            .info1 = info,
-                            .info2 = info) |> unlist()
-finaldf$cor_scer <- map2(finaldf$gene_name, finaldf$experiment, getCorelation,
-                         .cts1 = collapsed_allele$cer,
-                         .cts2 = collapsed$cer,
-                         .info1 = info_allele,
-                         .info2 = info) |> unlist()
-finaldf$cor_spar <- map2(finaldf$gene_name, finaldf$experiment, getCorelation,
-                         .cts1 = collapsed_allele$par,
-                         .cts2 = collapsed$par,
-                         .info1 = info_allele,
-                         .info2 = info) |> unlist()
-
 #### Trans-varying plasticity shows parental dominance in some environments ####
 
 # TODO: as the two environments with strongest dominance were 

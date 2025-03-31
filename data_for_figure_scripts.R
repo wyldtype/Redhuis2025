@@ -9,8 +9,20 @@ load("data_files/Cleaned_Count_Data.RData")
 load("data_files/Cleaned_Count_Data_AlleleSpecific.RData")
 
 #### filtering low expr ####
-# changing to non-log2 scale for actual filtering (log2 scale is for visualizing)
 cutoffExpr <- 30
+
+# Yeastract highly connected genes that are unannotated/filtered out for low expression:
+MissingHubGenes <- c("YBR240C", "YCL058C", "YCR106W", "YDR123C", "YER109C", "YER111C", "YER184C",
+                     "YFL052W", "YGL254W", "YGR288W", "YHR124W", "YJL127C", "YJR094C", "YKL222C",
+                     "YLR013W", "YLR176C", "YLR256W", "YLR266C", "YNR063W", "YOL028C", "YOR113W",
+                     "YOR380W", "YPL248C", "YPL133C", "YPR196W", "YJL056C")
+MissingHubGenes[!(MissingHubGenes %in% rownames(counts))]
+# All 4 unannotated genes have different CDS in Scer than other Saccharomyces:
+# FYV5 (de novo gene), FLO8 (truncated in Scer s288c), 
+# HAP1 (ty1 insertion), and YAP7 (indel in Scer)
+# changing to non-log2 scale for actual filtering (log2 scale is for visualizing)
+MissingHubGenes <- intersect(rownames(counts), MissingHubGenes)
+rowMeans(counts[MissingHubGenes,]) # remaining 22 are all lowly expressed
 
 # Criteria: mean expr less than threshold (30 cpm, not log scale) in
 # cer, par, hyc, and hyp in all experiments
@@ -38,11 +50,14 @@ getGoodExprGeneNames <- function(.organism, .allele, .experiment, .expr_thresh) 
 #                              .experiment = "HAP4", .expr_thresh = cutoffExpr)
 # "YPR199C" %in% test # should be
 # "YFL051C" %in% test # shouldn't be
+# sum(MissingHubGenes %in% test)
+# 
 # # in Spar
 # test <- getGoodExprGeneNames(.organism = "par", .allele = "par",
 #                              .experiment = "HAP4", .expr_thresh = cutoffExpr)
 # "YPR199C" %in% test # shouldn't be
 # "YFL051C" %in% test # should be
+# sum(MissingHubGenes %in% test)
 
 # applying to all genes/groups/experiments
 griddf <- expand_grid(organism = c("cer", "par", "hyb"),
@@ -64,8 +79,8 @@ colnames(TFdel_lookup) <- c("common", "systematic")
 length(keep) # number of genes we're keeping
 TFdel_lookup$common[!(TFdel_lookup$systematic %in% keep)] # all the TFdel genes we'd be removing based on this expression criteria
 TFdel_lookup$common[which(!(TFdel_lookup$systematic %in% rownames(counts)))] # but some aren't annotated in unfiltered dataset either
-# preserving TFs
-keep <- c(keep, TFdel_lookup$systematic) |> unique()
+# preserving TFs and yeastract hub genes
+keep <- c(keep, TFdel_lookup$systematic, MissingHubGenes) |> unique()
 keep <- keep[keep %in% rownames(counts)]
 length(keep)
 # filtering
@@ -407,6 +422,8 @@ levdyn_colordf <- tibble(type = c("salmon", "aquamarine", "gold", "greenyellow")
 load("data_files/CorrelationClustering3Disp.RData")
 load("data_files/single_gene_models.RData")
 load("data_files/Cleaned_Count_Data.RData")
+load("data_files/Cleaned_Counts.RData")
+load("data_files/Cleaned_Counts_Allele.RData")
 rm(counts, sample_info)
 ExperimentNames <- c("CC", "HAP4", "LowN", "LowPi", "Heat", "Cold")
 p_thresh <- 0.05
@@ -436,6 +453,15 @@ finaldf <- pivot_wider(spaldf, id_cols = c("gene_name", "experiment"),
              by = join_by("gene_name"=="gene_ID",
                           "experiment"))
 
+### Removing hybrid par allele-deleted genes from CC experiment (where the deletion was present)
+omit_list <- c("YLR078C", "YLR077W", "YLR074C", "YLR072W", "YLR075W", "YLR073C", # large hybrid CC paradoxus haplotype deletion
+               "YNL247W", "YNL244C")
+finaldf |> filter(experiment == "CC" & gene_name %in% omit_list)
+dim(finaldf)
+finaldf <- finaldf |> filter(!(experiment == "CC" & gene_name %in% omit_list))
+dim(finaldf)
+
+### Adding level and dynamics metrics
 finaldf$dynamics <- map2(finaldf$cer, finaldf$par, \(x, y) {
   if (x == y) {
     return("conserved")
@@ -460,19 +486,49 @@ finaldf$level <- map(c(1:nrow(finaldf)), \(i) {
 #                                    values_to = "level")
 
 table(finaldf$dynamics, finaldf$level, useNA = "always") # checking that all observations are in the 2x2 box
-finaldf <- drop_na(finaldf)
 sum(table(finaldf$level, finaldf$dynamics))
 nrow(finaldf) # mutually exclusive group categories
 finaldf |> filter(dynamics == "diverged") |> select(experiment) |> table()
 finaldf |> filter(level == "diverged") |> select(experiment) |> table()
 
-### Removing hybrid par allele-deleted genes from CC experiment (where the deletion was present)
-omit_list <- c("YLR078C", "YLR077W", "YLR074C", "YLR072W", "YLR075W", "YLR073C", # large hybrid CC paradoxus haplotype deletion
-               "YNL247W", "YNL244C")
-finaldf |> filter(experiment == "CC" & gene_name %in% omit_list)
-dim(finaldf)
-finaldf <- finaldf |> filter(!(experiment == "CC" & gene_name %in% omit_list))
-dim(finaldf)
+### Calculating ortholog pair correlations
+# between hybrid alleles and for parent-hybrid allele of the same species (Hyc/Scer and Hyp/Spar)
+getCorelation <- function(.gene_name, .experiment, 
+                          .cts1, .cts2, .info1, .info2) {
+  common_cols <- intersect(colnames(.cts1[,.info1$experiment == .experiment]), 
+                           colnames(.cts2[,.info2$experiment == .experiment]))
+  output <- cor(as.numeric(.cts1[.gene_name, common_cols]),
+                as.numeric(.cts2[.gene_name, common_cols]))
+  return(as.numeric(output))
+}
+# tests for getCorelation
+getCorelation("YGR192C", "HAP4",
+              .cts1 = collapsed$cer,
+              .cts2 = collapsed_allele$cer,
+              .info1 = info,
+              .info2 = info_allele)
+
+# adding corelation columns
+finaldf$cor_hybrid <- map2(finaldf$gene_name, finaldf$experiment, getCorelation,
+                           .cts1 = collapsed_allele$cer,
+                           .cts2 = collapsed_allele$par,
+                           .info1 = info_allele,
+                           .info2 = info_allele) |> unlist()
+finaldf$cor_parents <- map2(finaldf$gene_name, finaldf$experiment, getCorelation,
+                            .cts1 = collapsed$cer,
+                            .cts2 = collapsed$par,
+                            .info1 = info,
+                            .info2 = info) |> unlist()
+finaldf$cor_scer <- map2(finaldf$gene_name, finaldf$experiment, getCorelation,
+                         .cts1 = collapsed_allele$cer,
+                         .cts2 = collapsed$cer,
+                         .info1 = info_allele,
+                         .info2 = info) |> unlist()
+finaldf$cor_spar <- map2(finaldf$gene_name, finaldf$experiment, getCorelation,
+                         .cts1 = collapsed_allele$par,
+                         .cts2 = collapsed$par,
+                         .info1 = info_allele,
+                         .info2 = info) |> unlist()
 
 ### Checking allele mapping bias in individual genes
 # adding bias column to finaldf

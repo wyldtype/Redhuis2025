@@ -317,7 +317,7 @@ plotExpressionProfilePair <- function(.cts1, .cts2,
     }
     if (.plot_titles != "none" & .plot_titles != "experiment" &
         .plot_titles != "ngenes") {
-      p <- p + ggtitle(.plot_titles[rects$experiment_names == e])
+      p <- p + ggtitle(.plot_titles)
     }
     if (.show_points) {
       p <- p + geom_jitter(data = plotdf_e, aes(x = time_point_num, 
@@ -740,9 +740,9 @@ plotExpressionProfileQuartet <- function(.cts1, .cts2, .cts3, .cts4,
     pivot_longer(cols = colnames(expr4), names_to = "gene_name", values_to = "expr")
   gdf4$group_id <- "4"
   # converting each gene's expression to its mean expression between replicates
-  gdf <- bind_rows(gdf1, gdf2, gdf3, gdf4) |>
+  gdf <- bind_rows(gdf1, gdf2, gdf3, gdf4) |> 
     drop_na() |> # drops genes missing from an experiment (usually Heat/Cold)
-    group_by(group_id, gene_name, experiment, time_point_num) |> 
+    group_by(group_id, gene_name, experiment, time_point_num) |>
     summarise(expr = mean(expr, na.rm = TRUE)) |> ungroup()
   plotlimdf <- gdf |> group_by(time_point_num, experiment, group_id) |>
     summarise(mean_expr = mean(expr, na.rm = TRUE),
@@ -796,7 +796,7 @@ plotExpressionProfileQuartet <- function(.cts1, .cts2, .cts3, .cts4,
     }
     if (.plot_titles != "none" & .plot_titles != "experiment" &
         .plot_titles != "ngenes") {
-      p <- p + ggtitle(.plot_titles[rects$experiment_names == e])
+      p <- p + ggtitle(.plot_titles)
     }
     if (.show_points) {
       p <- p + geom_jitter(data = plotdf_e, aes(x = time_point_num, y = expr, color = group_id), size = 0.1, alpha = 0.5)
@@ -875,7 +875,7 @@ plotExpressionProfileQuartet <- function(.cts1, .cts2, .cts3, .cts4,
 # up_cer_idxs <- c("YMR194C-B", "YHR161C", "YJL127C-B", "YDL027C", "YNL175C",
 #                  "YHR104W", "YMR027W", "YDR479C", "YFR047C", "YJL055W")
 # # first yellow cer vs par, with up_cer genes indicated
-# plotExpressionProfileQuartet(.cts1 = collapsed$cer[conserved_idxs,],
+# test <- plotExpressionProfileQuartet(.cts1 = collapsed$cer[conserved_idxs,],
 #                              .cts2 = collapsed$par[conserved_idxs,],
 #                              .cts3 = collapsed$cer[up_cer_idxs,],
 #                              .cts4 = collapsed$par[up_cer_idxs,],
@@ -980,16 +980,17 @@ plotGenes <- function(.gene_idxs,
 # # but it does seem to be species-specific expression, and I want to see if that's
 # # true across all experiments, just straddling the threshold of low expr
 # test <- plotGenes("YIR041W", .experiment_name = "HAP4") # species specific
-# # before adding drop_na to gdf, profiles didn't show up in Heat/Cold 
-# # b/c of few missing genes 
-# # Example: LowPi 1-2 
+# # before adding drop_na to gdf, profiles didn't show up in Heat/Cold
+# # b/c of few missing genes
+# # Example: LowPi 1-2
 # gene_idxs <- finaldf |> filter(experiment == "LowPi" & dynamics == "diverged" &
 #                                  cer == 1 & par == 2) |>
 #   select(gene_name) |> pull()
-# plotGenes(gene_idxs, .experiment_name = "LowPi")
-# plotGenes(gene_idxs, .experiment_name = "LowN")
-# plotGenes(gene_idxs, .experiment_name = "Heat") # used to be missing
-# plotGenes(gene_idxs, .experiment_name = "Cold") # used to be missing
+# plotGenes(gene_idxs, .experiment_name = "HAP4", .plot_titles = "HAP4")
+# plotGenes(gene_idxs, .experiment_name = "LowPi", .plot_titles = "LowPi")
+# plotGenes(gene_idxs, .experiment_name = "LowN", .plot_titles = "LowN")
+# plotGenes(gene_idxs, .experiment_name = "Heat", .plot_titles = "Heat") # used to be missing
+# plotGenes(gene_idxs, .experiment_name = "Cold", .plot_titles = "Cold") # used to be missing
 # na_idxs <- which(is.na(collapsed$cer[gene_idxs, info$experiment == "Heat"]),
 #                  arr.ind = TRUE)
 # plotGenes(gene_idxs[-na_idxs[,1]], .experiment_name = "Heat")
@@ -1713,11 +1714,11 @@ makeUpsetPlot <- function(.df, .group_name, .group_members, .item_names,
               gp = gpar(fontsize = 6, col = "#404040"), rot = 45)
   }))
 }
-# # tests for makeUpsetPlot
-# # TF example within on organism
+# tests for makeUpsetPlot
+# TF example within on organism
 # makeUpsetPlot(.df = filter(effectdf, organism == "hyc" &
-#                              effect == "dynamics"), 
-#               .group_name = "deletion", 
+#                              effect == "dynamics"),
+#               .group_name = "deletion",
 #               .group_members = c("GAT1", "URE2", "GLN3"),
 #               .item_names = "gene_name")
 # # organism venn diagram of sharing gene-TF-effect items

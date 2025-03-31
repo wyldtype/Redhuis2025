@@ -529,31 +529,30 @@ clusterdf <- getClusterCombination(clusterdf_list)
 
 # saving
 # save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering1Disp.RData")
-# save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering3Disp.RData")
-# save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering5Disp.RData")
 save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering3Disp.RData")
+# save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering5Disp.RData")
 
-### Visualizing cluster expression patterns per experiment
-load("data_files/CorrelationClustering3Disp.RData")
-plotlist <- vector(mode = "list", length = 0)
-for (nm in names(clusterdf_list)) {
-  plotlist[[nm]] <- plotClusters(clusterdf_list[[nm]]$df, .nDownsample = 4000) + 
-    ggtitle(nm)
-}
-pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/all_clusters.pdf",
-    width = 7, height = 16)
-ggarrange(plotlist = plotlist, nrow = 4, ncol = 2)
-dev.off()
-
-### Supplementary figure: heiarchical clustering gene trees
-for (nm in names(clusterdf_list)) {
-  pdf(file = paste0("../../aligning_the_molecular_phenotype/paper_figures/Supplement/tree_",
-                    nm, ".pdf"), width = 9, height = 3)
-  plot(clusterdf_list[[nm]]$tree, labels = FALSE, xlab = "", 
-       ylab = "distance at merge",
-       main = nm)
-  dev.off()
-}
+# ### Visualizing cluster expression patterns per experiment
+# load("data_files/CorrelationClustering3Disp.RData")
+# plotlist <- vector(mode = "list", length = 0)
+# for (nm in names(clusterdf_list)) {
+#   plotlist[[nm]] <- plotClusters(clusterdf_list[[nm]]$df, .nDownsample = 4000) + 
+#     ggtitle(nm)
+# }
+# pdf("../../aligning_the_molecular_phenotype/paper_figures/Supplement/all_clusters.pdf",
+#     width = 7, height = 16)
+# ggarrange(plotlist = plotlist, nrow = 4, ncol = 2)
+# dev.off()
+# 
+# ### Supplementary figure: heiarchical clustering gene trees
+# for (nm in names(clusterdf_list)) {
+#   pdf(file = paste0("../../aligning_the_molecular_phenotype/paper_figures/Supplement/tree_",
+#                     nm, ".pdf"), width = 9, height = 3)
+#   plot(clusterdf_list[[nm]]$tree, labels = FALSE, xlab = "", 
+#        ylab = "distance at merge",
+#        main = nm)
+#   dev.off()
+# }
 
 ########################## Archive ########################## 
 #### centering & scaling ####
