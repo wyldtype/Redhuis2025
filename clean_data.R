@@ -999,7 +999,7 @@ fay_par <- counts[,sample_info$experiment %in% c("Heat", "Cold") &
                     sample_info$allele == "par"]
 sum(gene_lens_spar$gene_name == rownames(fay_par))/nrow(fay_par)
 fay_par_cpm <- countsPerMillionWithLength(.cts = fay_par,
-                                      .lens = gene_lens_scer$length)
+                                      .lens = gene_lens_spar$length)
 # normalizing tagseq not by length
 tagseq_cpm <- countsPerMillion(counts[,!sample_info$experiment %in% c("Heat", "Cold")])
 # re-combining

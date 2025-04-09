@@ -11,18 +11,18 @@ load("data_files/Cleaned_Count_Data_AlleleSpecific.RData")
 #### filtering low expr ####
 cutoffExpr <- 30
 
-# Yeastract highly connected genes that are unannotated/filtered out for low expression:
-MissingHubGenes <- c("YBR240C", "YCL058C", "YCR106W", "YDR123C", "YER109C", "YER111C", "YER184C",
-                     "YFL052W", "YGL254W", "YGR288W", "YHR124W", "YJL127C", "YJR094C", "YKL222C",
-                     "YLR013W", "YLR176C", "YLR256W", "YLR266C", "YNR063W", "YOL028C", "YOR113W",
-                     "YOR380W", "YPL248C", "YPL133C", "YPR196W", "YJL056C")
-MissingHubGenes[!(MissingHubGenes %in% rownames(counts))]
+# # Yeastract highly connected genes that are unannotated/filtered out for low expression:
+# MissingHubGenes <- c("YBR240C", "YCL058C", "YCR106W", "YDR123C", "YER109C", "YER111C", "YER184C",
+#                      "YFL052W", "YGL254W", "YGR288W", "YHR124W", "YJL127C", "YJR094C", "YKL222C",
+#                      "YLR013W", "YLR176C", "YLR256W", "YLR266C", "YNR063W", "YOL028C", "YOR113W",
+#                      "YOR380W", "YPL248C", "YPL133C", "YPR196W", "YJL056C")
+# MissingHubGenes[!(MissingHubGenes %in% rownames(counts))]
 # All 4 unannotated genes have different CDS in Scer than other Saccharomyces:
 # FYV5 (de novo gene), FLO8 (truncated in Scer s288c), 
 # HAP1 (ty1 insertion), and YAP7 (indel in Scer)
 # changing to non-log2 scale for actual filtering (log2 scale is for visualizing)
-MissingHubGenes <- intersect(rownames(counts), MissingHubGenes)
-rowMeans(counts[MissingHubGenes,]) # remaining 22 are all lowly expressed
+# MissingHubGenes <- intersect(rownames(counts), MissingHubGenes)
+# rowMeans(counts[MissingHubGenes,]) # remaining 22 are all lowly expressed
 
 # Criteria: mean expr less than threshold (30 cpm, not log scale) in
 # cer, par, hyc, and hyp in all experiments
@@ -80,7 +80,8 @@ length(keep) # number of genes we're keeping
 TFdel_lookup$common[!(TFdel_lookup$systematic %in% keep)] # all the TFdel genes we'd be removing based on this expression criteria
 TFdel_lookup$common[which(!(TFdel_lookup$systematic %in% rownames(counts)))] # but some aren't annotated in unfiltered dataset either
 # preserving TFs and yeastract hub genes
-keep <- c(keep, TFdel_lookup$systematic, MissingHubGenes) |> unique()
+# keep <- c(keep, TFdel_lookup$systematic, MissingHubGenes) |> unique()
+keep <- c(keep, TFdel_lookup$systematic) |> unique()
 keep <- keep[keep %in% rownames(counts)]
 length(keep)
 # filtering
@@ -407,15 +408,17 @@ save(counts_list, info, file = "data_files/Clustering_Counts.RData")
 
 #### Categorizing level and dynamics of all genes ####
 # colors used throughout paper
-levdyn_colordf <- tibble(type = c("salmon", "aquamarine", "gold", "greenyellow"),
+levdyn_colordf <- tibble(type = c("salmon", "aquamarine", "gold", "greenyellow", "grey80"),
                          labels = c("conserved level \nand dynamics", 
                                     "conserved level, \ndiverged dynamics", 
                                     "diverged level, \nconserved dynamics", 
-                                    "diverged level \nand dynamics"),
+                                    "diverged level \nand dynamics",
+                                    "lowly expressed"),
                          limits = c("conserved level and dynamics", 
                                     "conserved level, diverged dynamics", 
                                     "diverged level, conserved dynamics", 
-                                    "diverged level and dynamics"))
+                                    "diverged level and dynamics",
+                                    "lowly expressed"))
 
 # Running the following section requires running the clustering.R 
 # and single_gene_model_construction_and_QC>R scripts first

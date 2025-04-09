@@ -1,4 +1,4 @@
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025/")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/aligning_the_molecular_phenotype/Redhuis2025/")
 source("functions_for_figure_scripts.R")
 load("data_files/FinalDataframe3Disp.RData")
 load("data_files/Cleaned_Counts.RData")

@@ -4,7 +4,7 @@
 # a happy medium between experiment-specific clustering and combined-experiment
 # clustering is to describe each gene by its combination of 
 # expression "shapes" in each experiment
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025/")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/aligning_the_molecular_phenotype/Redhuis2025/")
 options(stringsAsFactors = FALSE)
 source("functions_for_figure_scripts.R")
 load("data_files/Clustering_Counts.RData")
@@ -489,7 +489,7 @@ var_thresh <- 3
 
 clusterdf_list <- vector(mode = "list", length = 0)
 nclust_lookup <- tibble(experiment = c("HAP4", "LowPi", "CC", "LowN", "Cold", "Heat"),
-                        nclust = c(2, 2, 2, 2, 3, 4))
+                        nclust = c(2, 2, 2, 2, 2, 2))
 nclust_lookup
 for (e in nclust_lookup$experiment) {
   nclust <- nclust_lookup |> filter(experiment == e) |> 
@@ -527,7 +527,7 @@ getClusterCombination <- function(.clust_list) {
 }
 clusterdf <- getClusterCombination(clusterdf_list)
 
-# saving
+#### Saving ####
 # save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering1Disp.RData")
 save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering3Disp.RData")
 # save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering5Disp.RData")
