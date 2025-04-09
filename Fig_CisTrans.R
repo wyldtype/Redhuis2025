@@ -1,50 +1,25 @@
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025/")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/aligning_the_molecular_phenotype/Redhuis2025/")
 source("functions_for_figure_scripts.R")
 load("data_files/FinalDataframe3Disp.RData")
 load("data_files/Cleaned_Counts.RData")
 load("data_files/Cleaned_Counts_Allele.RData")
 
 cor_thresh <- 0.8
+eff_thresh <- log2(1.5)
 
-#### Log2 Fold Change Controls/Sanity Checks ####
+#### Divergence in level is preserved in the hybrid ####
 
-### Do level divergers have more correlated l2fc between parents and hybrid alleles?
-
-# R squared for conserved-level genes
-mod <- lm(effect_size_allele ~ effect_size_species, data = filter(finaldf, level == "conserved"))
-summary(mod)
-# R squared for level-diverged genes
-mod <- lm(effect_size_allele ~ effect_size_species, data = filter(finaldf, level == "diverged"))
-summary(mod) # lower
-# Are log2 fold changes less correlated among level diverged genes b/c as they get
-# larger they get noisier?
-
-# using LowPi-unique upcer level genes---transest case u no
-length(lowpi_upcer_idxs)
-idx <- 1
-while (idx < length(lowpi_upcer_idxs)) {
-  cat(idx, "\n")
-  print(annotate_figure(plotEnvironments(lowpi_upcer_idxs[idx], .quartet = TRUE),
-                        top = lowpi_upcer_idxs[idx]))
-  idx <- idx + 1
-}
-# conclusion: it's not all 83 genes, but lots do have
-# Spar drop off early on and both hybrid alleles climb
-# with Scer
-# Question: are the ones that have this behavior more
-# likely to be diverging in dynamics?
-lowpi_levdyn_idxs <- finaldf |> filter(experiment == "LowPi" &
-                                         dynamics == "diverged") |> 
-  select(gene_name) |> pull() |> 
-  intersect(y = lowpi_upcer_idxs)
-idx <- 1
-while (idx < length(lowpi_levdyn_idxs)) {
-  cat(idx, "\n")
-  print(annotate_figure(plotEnvironments(lowpi_levdyn_idxs[idx], .quartet = TRUE),
-                        top = lowpi_levdyn_idxs[idx]))
-  idx <- idx + 1
-}
-# no, about half of them still
+# R squared for effect sizes between parents and hybrid for all genes
+mod_full <- lm(effect_size_allele ~ effect_size_species, data = finaldf)
+summary(mod_full)
+# R squared genes with consistent effect size and diverged level in at least one environment
+levdiv_genes <-  filter(finaldf, level == "diverged") |> 
+  select(gene_name) |> pull() |> unique()
+plotdf <- finaldf |> filter(gene_name %in% levdiv_genes) |> 
+  group_by(gene_name) |> summarise(n_lev_dir = length(sign(effect_size_species))) |> 
+  filter(n_lev_dir == 1)
+mod <- lm(effect_size_allele ~ effect_size_species, data = filter(finaldf, gene_name %in% plotdf$gene_name))
+summary(mod) # more correlated for genes with the most consistent level divergence across envrironments
 
 # observation from average expression: level divergers are way
 # more likely to have hybrid l2fc in same direction as parents
@@ -58,162 +33,147 @@ ggplot(finaldf, aes(x = effect_size_species,
   facet_wrap(~group4) +
   xlim(c(-5, 5)) +
   ylim(c(-5, 5))
+library(ggExtra)
+pdf("../paper_figures/CisTrans/l2fc_allEnvironments.pdf",
+    width = 5, height = 5)
 ggMarginal(ggplot(finaldf, aes(x = effect_size_species,
                                y = effect_size_allele)) +
+             geom_vline(xintercept = 0, alpha = 0.5) +
+             geom_hline(yintercept = 0, alpha = 0.5) +
+             geom_abline(slope = 1, intercept = 0, alpha = 0.5) +
              geom_point(aes(color = group4)) +
+             geom_text(x = -4, y = 4.5, 
+                       label = paste0("R^2 = ", round(summary(mod_full)$r.squared,
+                                                      digits = 3))) +
              scale_color_discrete(breaks = levdyn_colordf$limits,
                                   type = levdyn_colordf$type,
                                   limits = levdyn_colordf$limits) +
              xlim(c(-5, 5)) +
-             ylim(c(-5, 5)),
+             ylim(c(-5, 5)) +
+             xlab("log2 fold change between species") +
+             ylab("log2 fold change between hybrid alleles") +
+             geom_rect(xmin = eff_thresh, xmax = 5, ymin = eff_thresh, ymax = 5, 
+                       alpha = 0, color = "black") +
+             geom_rect(xmin = -5, xmax = -eff_thresh, 
+                       ymin = -eff_thresh, ymax = eff_thresh, 
+                       alpha = 0, color = "black", linetype = "dashed") +
+             theme_classic() +
+             theme(legend.position = "none"),
            groupColour = TRUE, groupFill = TRUE)
-# you can kind of see that diverged level genes 
-# have stronger effect_size_allele, but can't tell
-# that it's in the same direction as parent
-
-# TODO: parent-hybrid lfc correlations for each divergence group
-
-
-#### Hybrid expression in environment specific vs environment robust level-divergers ####
-
-# TODO: come back to this after finding a better
-# way of visualizing hybrid allele l2fc
-# (because level divergers should gernally have correlated
-# l2fc but it's so noisy it's hard to see this)
-
-# idxs generated in Fig_environmental_patterns for now
-length(constitutive_upcer_tagseq_idxs)
-length(constitutive_uppar_tagseq_idxs)
-length(constitutive_upcer_heatcold_idxs)
-length(constitutive_uppar_heatcold_idxs)
-length(hap4_upcer_idxs)
-length(cc_upcer_idxs)
-length(lown_upcer_idxs)
-length(lowpi_upcer_idxs)
-length(heat_upcer_idxs)
-length(cold_upcer_idxs)
-length(hap4_uppar_idxs)
-length(cc_uppar_idxs)
-length(lown_uppar_idxs)
-length(lowpi_uppar_idxs)
-length(heat_uppar_idxs)
-length(cold_uppar_idxs)
-env_robust_idxs <- unique(c(constitutive_upcer_tagseq_idxs,
-                            constitutive_uppar_tagseq_idxs,
-                            constitutive_upcer_heatcold_idxs,
-                            constitutive_uppar_heatcold_idxs))
-env_specific_idxs <- unique(c(hap4_upcer_idxs, cc_upcer_idxs,
-                              lown_upcer_idxs, lowpi_upcer_idxs,
-                              heat_upcer_idxs, cold_upcer_idxs,
-                              hap4_uppar_idxs, cc_uppar_idxs,
-                              lown_uppar_idxs, lowpi_uppar_idxs,
-                              heat_uppar_idxs, cold_uppar_idxs))
-env_specific_list <- list(HAP4 = c(hap4_upcer_idxs, hap4_uppar_idxs),
-                          CC = c(cc_upcer_idxs, cc_uppar_idxs),
-                          LowN = c(lown_upcer_idxs, lown_uppar_idxs),
-                          LowPi = c(lowpi_upcer_idxs, lowpi_uppar_idxs),
-                          Heat = c(heat_upcer_idxs, heat_uppar_idxs),
-                          Cold = c(cold_upcer_idxs, cold_uppar_idxs))
-
-### Log2 fold change parents vs hybrids env specific vs constitutive level divergers
-plotdf <- filter(finaldf, level == "diverged") |> 
-  mutate(env_specific_or_robust = if_else(gene_name %in% env_robust_idxs,
-                                          true = "robust",
-                                          false = if_else(gene_name %in% env_specific_idxs,
-                                                          true = "specific",
-                                                          false = "neither")))
-plotdf$env_specific_or_robust |> table()
-ggplot(plotdf, aes(x = abs(effect_size_species))) +
-  geom_density(aes(fill = env_specific_or_robust), alpha = 0.5) +
-  facet_wrap(~experiment) +
-  theme_classic() # robust have larger effect sizes
-for (e in ExperimentNames) {
-  e_idxs <- env_specific_list[[e]]
-  plotdf <- filter(finaldf, level == "diverged" & experiment == e) |> 
-    mutate(env_specific_or_robust = if_else(gene_name %in% env_robust_idxs,
-                                            true = "robust",
-                                            false = if_else(gene_name %in% e_idxs,
-                                                            true = "specific",
-                                                            false = "neither")))
-  p_scatter <- ggplot(plotdf,
-                      aes(x = effect_size_species,
-                          y = effect_size_allele)) +
-    geom_abline(slope = 1, intercept = 0, color = "black") +
-    geom_point(aes(color = env_specific_or_robust)) +
-    facet_wrap(~env_specific_or_robust) +
-    theme_classic() +
-    labs(color = "gene group") +
-    xlab("log2 fold change, parents") +
-    ylab("log2 fold change, hybrid") +
-    ggtitle(e)
-  p_dens <- ggplot(plotdf, aes(x = log2(abs(effect_size_allele))*sign(effect_size_allele))) +
-    geom_density(aes(fill = env_specific_or_robust), alpha = 0.5) +
-    theme_classic() +
-    ggtitle(e)
-  print(ggarrange(p_scatter, p_dens, nrow = 2, ncol = 1))
-}
-
-#### Divergence in level is preserved in the hybrid ####
-plotdf <- filter(finaldf, !(level %in% c("low_expr", "biased")))
-# scatter plot of LFCs in parent and hybrid with dynamics divergence colored
-# R squared for all (non-lowly expressed) genes
-mod <- lm(effect_size_allele ~ effect_size_species, data = plotdf)
-summary(mod)
-# R squared for level-diverged genes
-mod <- lm(effect_size_allele ~ effect_size_species, data = filter(plotdf, level == "diverged"))
-summary(mod)
-# plotting
-p_scatter <- ggplot(plotdf,
-                    aes(x = effect_size_species,
-                        y = effect_size_allele)) +
-  geom_abline(slope = 1, intercept = 0, color = "black") +
-  geom_vline(xintercept = c(-1, 1), color = "black", linetype = "dashed") +
-  geom_point(aes(color = group4)) +
-  facet_wrap(~experiment) +
-  scale_color_discrete(type = levdyn_colordf$type,
-                       labels = levdyn_colordf$labels,
-                       limits = levdyn_colordf$limits) +
-  theme_classic() +
-  theme(legend.position = "none") +
-  labs(color = "gene group") +
-  xlab("log2 fold change, parents") +
-  ylab("log2 fold change, hybrid") +
-  ggtitle("") +
-  xlim(c(-8, 8)) +
-  ylim(c(-8, 8)) +
-  stat_cor(cor.coef.name = "R")
-
-# accompanying barplot to show that most of these genes have conserved dynamics
-p_bar <- ggplot(plotdf, aes(x = group4)) +
-  geom_bar(aes(fill = group4)) +
-  geom_text(stat='count', aes(label = after_stat(count)), vjust=-1) +
-  scale_fill_discrete(type = levdyn_colordf$type,
-                      labels = levdyn_colordf$labels,
-                      limits = levdyn_colordf$limits) +
-  scale_x_discrete(limits = levdyn_colordf$limits) +
-  theme_classic() +
-  theme(axis.text.x = element_blank(),
-        legend.position = "right",
-        plot.margin = margin(t = 1, r = 0.1, b = 0.1, l = 0.1, "cm")) +
-  ggtitle("genes in each group") +
-  facet_wrap(~experiment) +
-  ylim(c(0, 4100))
-
-# level and dynamics summary
-library(ggExtra)
-ggarrange(p_scatter, p_bar, nrow = 1, ncol = 2,
-          common.legend = TRUE, widths = c(2, 1), hjust = 1,
-          legend = "bottom")
-
-pdf(file = paste0("../../aligning_the_molecular_phenotype/paper_figures/CisTrans/l2fc.pdf"),
-    width = 4, height = 4)
-p_scatter
 dev.off()
 
-pdf(file = paste0("../../aligning_the_molecular_phenotype/paper_figures/CisTrans/bar.pdf"),
-    width = 6, height = 4)
-p_bar
+### Average expression of top gene groups in each box
+e <- "LowPi"
+plotlims <- c(4, 8)
+# dashed, trans-varying upPar level genes in one environment
+uppar_trans_idxs <- finaldf |> filter(effect_size_species < -eff_thresh &
+                                 effect_size_allele > -eff_thresh &
+                                 effect_size_allele < 0 &
+                                  experiment == e & 
+                                   cer == 1 & par == 1) |> 
+  select(gene_name) |> pull() |> unique()
+pdf("../paper_figures/CisTrans/trans_example.pdf",
+    width = 3, height = 3)
+annotate_figure(plotGenes(.gene_idxs = uppar_trans_idxs, .quartet = TRUE,
+          .experiment_name = e, .plotlims = plotlims),
+          top = paste(e, length(uppar_trans_idxs), "genes"))
 dev.off()
+# solid, cis-varying upCer level genes, ID'd in LowPi
+uppar_cis_idxs <- finaldf |> filter(effect_size_species > eff_thresh &
+                                        effect_size_allele > eff_thresh &
+                                        experiment == e & 
+                                      cer == 1 & par == 1) |> 
+  select(gene_name) |> pull() |> unique()
+pdf("../paper_figures/CisTrans/cis_example.pdf",
+    width = 3, height = 3)
+annotate_figure(plotGenes(.gene_idxs = uppar_cis_idxs, .quartet = TRUE,
+          .experiment_name = e, .plotlims = plotlims), 
+          top = paste(e, length(uppar_cis_idxs), "genes"))
+dev.off()
+
+#### Dynamics divergence is not well preserved in the hybrid ####
+pdf("../paper_figures/CisTrans/cor_allEnvironments.pdf",
+    width = 5, height = 5)
+plotdf <- filter(finaldf, dynamics == "diverged" & cer != 0 & par != 0)
+ggMarginal(ggplot(plotdf, aes(x = cor_parents, y = cor_hybrid)) +
+  geom_point(aes(color = experiment)) +
+    xlim(c(-1, 1)) +
+    ylim(c(-1, 1)) +
+    xlab("expression correlation between species") +
+    ylab("expression correlation between hybrid alleles") +
+    geom_rect(xmin = -1, xmax = 1, ymin = 0.5, ymax = 1, 
+              alpha = 0, color = "black") +
+    geom_rect(xmin = -1, xmax = 1, 
+              ymin = -1, ymax = 0.5, 
+              alpha = 0, color = "black", linetype = "dashed") +
+    theme_classic() +
+    theme(legend.position = "left"),
+  groupColour = TRUE, groupFill = TRUE)
+dev.off()
+
+### Average expression of top gene groups in each box
+e <- "HAP4"
+plotlims <- c(5, 9)
+# dashed, trans-varying upPar level genes in one environment
+transdyndiv_idxs <- finaldf |> filter(cer == 2 & par == 1 &
+                                    experiment == e &
+                                    cor_hybrid > 0.5) |> 
+  select(gene_name) |> pull() |> unique()
+pdf("../paper_figures/CisTrans/trans_dynamics_example.pdf",
+    width = 3, height = 3)
+annotate_figure(plotGenes(.gene_idxs = transdyndiv_idxs, .quartet = TRUE,
+                          .experiment_name = e, .plotlims = plotlims), 
+                top = paste(e, length(transdyndiv_idxs), "genes"))
+dev.off()
+# solid, cis-varying upCer level genes, ID'd in LowPi
+cisdyndiv_idxs <- finaldf |> filter(cor_hybrid < 0 &
+                                      experiment == e & 
+                                      cer == 2 & par == 1) |> 
+  select(gene_name) |> pull() |> unique()
+pdf("../paper_figures/CisTrans/cis_dynamics_example.pdf",
+    width = 3, height = 3)
+annotate_figure(plotGenes(.gene_idxs = cisdyndiv_idxs, .quartet = TRUE,
+                          .experiment_name = e, .plotlims = plotlims), 
+                top = paste(e, length(cisdyndiv_idxs), "genes"))
+dev.off()
+
+# Some dynamics-divergers in Heat and Cold have near perfect
+# correlation in the parents. Why?
+# Heat
+finaldf |> filter(experiment == "Heat" & 
+                    dynamics == "diverged" &
+                    cor_parents > 0.5 & cer != 0 & par != 0) |>
+  select(cer, par) |> table() # mainly Spar cluster 1 genes
+gene_idxs <- finaldf |> filter(experiment == "Heat" &
+                    cor_parents > 0.5 & cer == 2 & par == 1) |> 
+  select(gene_name) |> pull()
+plotGenes(gene_idxs, .experiment_name = "Heat")
+# compare to conserved dynamics:
+gene_idxs <- finaldf |> filter(experiment == "Heat" &
+                                 cor_parents > 0.5 & cer == 2 & par == 2) |> 
+  select(gene_name) |> pull()
+plotGenes(gene_idxs, .experiment_name = "Heat")
+# conclusion: correlation is accurate. Spar is diverging in dynamics b/c
+# of lower tp0 expression, but follows the same shape
+# Cold
+finaldf |> filter(experiment == "Cold" & 
+                    dynamics == "diverged" &
+                    cor_parents > 0.5 & cer != 0 & par != 0) |>
+  select(cer, par) |> table() # 2-1 divergers
+gene_idxs <- finaldf |> filter(experiment == "Cold" &
+                                 cor_parents > 0.5 & cer == 2 & par == 1) |> 
+  select(gene_name) |> pull()
+plotGenes(gene_idxs, .experiment_name = "Cold")
+# compare to conserved dynamics
+gene_idxs <- finaldf |> filter(experiment == "Cold" &
+                                 cor_parents > 0.5 & cer == 2 & par == 2) |> 
+  select(gene_name) |> pull()
+plotGenes(gene_idxs, .experiment_name = "Cold")
+# conclusion: Similar to Heat, slight deviation in expression dynamics,
+# this time Spar is higher at second timepoint, but generally correlated
+
+# Overall conclusion: Single timepoints in heat/cold caused groups of genes
+# to be put in diverging dynamics clusters while still being correlated at the 3 other timepoints
 
 #### Trans-varying plasticity shows parental dominance in some environments ####
 
@@ -1123,6 +1083,78 @@ annotate_figure(plotGenes(.gene_idxs = gene_idxs, .quartet = TRUE, .experiment_n
 dev.off()
 
 ########################## archive #########################
+#### Examining specific gene groups ID'd in Environmental Patterns script ####
+# # idxs generated in Fig_environmental_patterns for now
+# length(constitutive_upcer_tagseq_idxs)
+# length(constitutive_uppar_tagseq_idxs)
+# length(constitutive_upcer_heatcold_idxs)
+# length(constitutive_uppar_heatcold_idxs)
+# length(hap4_upcer_idxs)
+# length(cc_upcer_idxs)
+# length(lown_upcer_idxs)
+# length(lowpi_upcer_idxs)
+# length(heat_upcer_idxs)
+# length(cold_upcer_idxs)
+# length(hap4_uppar_idxs)
+# length(cc_uppar_idxs)
+# length(lown_uppar_idxs)
+# length(lowpi_uppar_idxs)
+# length(heat_uppar_idxs)
+# length(cold_uppar_idxs)
+# env_robust_idxs <- unique(c(constitutive_upcer_tagseq_idxs,
+#                             constitutive_uppar_tagseq_idxs,
+#                             constitutive_upcer_heatcold_idxs,
+#                             constitutive_uppar_heatcold_idxs))
+# env_specific_idxs <- unique(c(hap4_upcer_idxs, cc_upcer_idxs,
+#                               lown_upcer_idxs, lowpi_upcer_idxs,
+#                               heat_upcer_idxs, cold_upcer_idxs,
+#                               hap4_uppar_idxs, cc_uppar_idxs,
+#                               lown_uppar_idxs, lowpi_uppar_idxs,
+#                               heat_uppar_idxs, cold_uppar_idxs))
+# env_specific_list <- list(HAP4 = c(hap4_upcer_idxs, hap4_uppar_idxs),
+#                           CC = c(cc_upcer_idxs, cc_uppar_idxs),
+#                           LowN = c(lown_upcer_idxs, lown_uppar_idxs),
+#                           LowPi = c(lowpi_upcer_idxs, lowpi_uppar_idxs),
+#                           Heat = c(heat_upcer_idxs, heat_uppar_idxs),
+#                           Cold = c(cold_upcer_idxs, cold_uppar_idxs))
+# 
+# ### Log2 fold change parents vs hybrids env specific vs constitutive level divergers
+# plotdf <- filter(finaldf, level == "diverged") |> 
+#   mutate(env_specific_or_robust = if_else(gene_name %in% env_robust_idxs,
+#                                           true = "robust",
+#                                           false = if_else(gene_name %in% env_specific_idxs,
+#                                                           true = "specific",
+#                                                           false = "neither")))
+# plotdf$env_specific_or_robust |> table()
+# ggplot(plotdf, aes(x = abs(effect_size_species))) +
+#   geom_density(aes(fill = env_specific_or_robust), alpha = 0.5) +
+#   facet_wrap(~experiment) +
+#   theme_classic() # robust have larger effect sizes
+# for (e in ExperimentNames) {
+#   e_idxs <- env_specific_list[[e]]
+#   plotdf <- filter(finaldf, level == "diverged" & experiment == e) |> 
+#     mutate(env_specific_or_robust = if_else(gene_name %in% env_robust_idxs,
+#                                             true = "robust",
+#                                             false = if_else(gene_name %in% e_idxs,
+#                                                             true = "specific",
+#                                                             false = "neither")))
+#   p_scatter <- ggplot(plotdf,
+#                       aes(x = effect_size_species,
+#                           y = effect_size_allele)) +
+#     geom_abline(slope = 1, intercept = 0, color = "black") +
+#     geom_point(aes(color = env_specific_or_robust)) +
+#     facet_wrap(~env_specific_or_robust) +
+#     theme_classic() +
+#     labs(color = "gene group") +
+#     xlab("log2 fold change, parents") +
+#     ylab("log2 fold change, hybrid") +
+#     ggtitle(e)
+#   p_dens <- ggplot(plotdf, aes(x = log2(abs(effect_size_allele))*sign(effect_size_allele))) +
+#     geom_density(aes(fill = env_specific_or_robust), alpha = 0.5) +
+#     theme_classic() +
+#     ggtitle(e)
+#   print(ggarrange(p_scatter, p_dens, nrow = 2, ncol = 1))
+# }
 #### Other measures of parent/hybrid allele similarity ####
 # calculate Area Between Curves, abc
 # takes mean difference between each row in cts1 - each row in cts2
