@@ -69,16 +69,27 @@ plotClusterPatternByExperiment <- function(.df, .experiment, .title = NULL) {
     theme(legend.position = "right") +
     ggtitle(.title)
 }
-pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/cluster_ref.pdf",
-    width = 15, height = 2)
+pdf("../../aligning_the_molecular_phenotype/paper_figures/ExperimentOverview/cluster_ref.pdf",
+    width = 8, height = 4)
 ggarrange(plotClusterPatternByExperiment(clusterdf_list$HAP4_2$df, .experiment = "HAP4"),
           plotClusterPatternByExperiment(clusterdf_list$CC_2$df, .experiment = "CC"),
           plotClusterPatternByExperiment(clusterdf_list$LowN_2$df, .experiment = "LowN"),
           plotClusterPatternByExperiment(clusterdf_list$LowPi_2$df, .experiment = "LowPi"),
-          plotClusterPatternByExperiment(clusterdf_list$Heat_4$df, .experiment = "Heat"),
-          plotClusterPatternByExperiment(clusterdf_list$Cold_3$df, .experiment = "Cold"),
-          nrow = 1, ncol = 6, common.legend = FALSE)
+          plotClusterPatternByExperiment(clusterdf_list$Heat_2$df, .experiment = "Heat"),
+          plotClusterPatternByExperiment(clusterdf_list$Cold_2$df, .experiment = "Cold"),
+          nrow = 2, ncol = 3, common.legend = FALSE)
 dev.off()
+
+# pdf("../../aligning_the_molecular_phenotype/paper_figures/ExperimentOverview/cluster_ref.pdf",
+#     width = 15, height = 2)
+# ggarrange(plotClusterPatternByExperiment(clusterdf_list$HAP4_2$df, .experiment = "HAP4"),
+#           plotClusterPatternByExperiment(clusterdf_list$CC_2$df, .experiment = "CC"),
+#           plotClusterPatternByExperiment(clusterdf_list$LowN_2$df, .experiment = "LowN"),
+#           plotClusterPatternByExperiment(clusterdf_list$LowPi_2$df, .experiment = "LowPi"),
+#           plotClusterPatternByExperiment(clusterdf_list$Heat_2$df, .experiment = "Heat"),
+#           plotClusterPatternByExperiment(clusterdf_list$Cold_2$df, .experiment = "Cold"),
+#           nrow = 1, ncol = 6, common.legend = FALSE)
+# dev.off()
 
 # most common Scer shape
 plotdf <- expand_grid(experiment = unique(finaldf$experiment),
@@ -173,7 +184,66 @@ ggarrange(p_tp0, p_cc, nrow = 2, ncol = 1)
 dev.off()
 # TODO: if you end up using this, add counts above each barplot and line group
 
-#### Heatmap-type quantification of dynamics divergence in each environment #### 
+#### Similar proportions of level/dynamics divergence in all 6 environments ####
+# Stacked bars of 4 groups in each environment
+plotdf <- finaldf |> select(gene_name, experiment, group4) |> 
+  pivot_wider(id_cols = c("gene_name"), names_from = "experiment",
+              values_from = "group4") |> 
+  pivot_longer(cols = ExperimentNames, names_to = "experiment",
+               values_to = "group5") # to add NA values for low expression
+plotdf$group5 <- if_else(is.na(plotdf$group5), true = "lowly expressed",
+                         false = plotdf$group5)
+plotdf$experiment <- factor(plotdf$experiment, levels = ExperimentNames)
+pdf("../paper_figures/EnvironmentalPatterns/stacked_bars.pdf",
+    width = 5, height = 3)
+ggplot(plotdf, aes(x = experiment)) + 
+  geom_bar(aes(fill = group5)) +
+  scale_fill_discrete(type = levdyn_colordf$type,
+                      limits = levdyn_colordf$limits) +
+  scale_x_discrete(limits = ExperimentNames, labels = LongExperimentNames) +
+  theme_classic() +
+  theme(legend.title = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1, vjust = 1)) +
+  ylab("number of genes") +
+  xlab("")
+dev.off()
+# Ridgeline plot of log2 fold change in each environment
+library(ggridges)
+pdf("../paper_figures/EnvironmentalPatterns/ridgeline.pdf",
+    width = 4, height = 3)
+plotdf <- filter(finaldf, level == "diverged")
+ggplot(plotdf, aes(x = effect_size_species, y = experiment, fill = experiment)) +
+  geom_density_ridges() +
+  theme_classic() +
+  theme(legend.position = "none") +
+  ylab("") +
+  xlab("log2 fold change\n<- higher in Spar / higher in Scer ->") +
+  scale_y_discrete(limits = ExperimentNames, labels = LongExperimentNames)
+dev.off()
+
+# TODO: heatmap of species-specific and reversals of expression plasticity
+plotdf <- finaldf |> filter(dynamics == "diverged") |> 
+  group_by(experiment, cer, par) |> 
+  summarise(n = n())
+plotdf$long_experiment <- map(plotdf$experiment, \(e) {
+  LongExperimentNames[which(ExperimentNames == e)]
+}) |> factor(levels = LongExperimentNames)
+plotdf$cer <- factor(plotdf$cer, levels = c("0", "1", "2"))
+plotdf$par <- factor(plotdf$par, levels = c("2", "1", "0"))
+pdf("../paper_figures/EnvironmentalPatterns/dynamics_counts_heatmap.pdf",
+    width = 4, height = 3)
+ggplot(plotdf, aes(x = cer, y = par, fill = n)) +
+  geom_tile() +
+  geom_text(aes(label = n), color = "white") +
+  facet_wrap(~long_experiment) +
+  theme_classic() +
+  xlab("Scer dynamics cluster") +
+  ylab("Spar dynamics cluster") +
+  guides(fill=guide_legend(title="number of genes")) +
+  theme(legend.position = "none")
+dev.off()
+
+#### Dynamics divergence is unique to each environment #### 
 
 # Y axis: environment those 2-1 or 1-2 divergers were ID'd in
 # X axis: how their dynamics divergence looks in other environments
