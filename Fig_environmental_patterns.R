@@ -6,9 +6,6 @@ load("data_files/Cleaned_Counts.RData")
 load("data_files/Cleaned_Counts_Allele.RData")
 load(file = "data_files/GO_Slim.RData")
 
-ExperimentNames <- c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold")
-LongExperimentNames <- c("Saturated Growth", "Cell Cycle", "Low Nitrogen", "Low Phosphate", "Heat Stress", "Cold Stress")
-
 # Goal: Here is the place to link findings from each individual environment
 # to identify general patterns. The main way to convince people they are general
 # patterns is to categorize every gene into one group (conserved, cis/level divergent,
@@ -45,10 +42,9 @@ quick_html(ht, file = "../../aligning_the_molecular_phenotype/paper_figures/Envi
 display.brewer.all()
 load("data_files/CorrelationClustering3Disp.RData")
 # color palettes we'll use for the 6 environments
-palettedf <- tibble(experiment = c("CC", "HAP4", "LowN", "LowPi", "Cold", "Heat"),
-                    palette = c("YlGn", "Greys", "Greens", "Purples", "BuPu", "YlOrBr"),
-                    long_name = c("Cell Cycle", "Saturated Growth", "Low Nitrogen",
-                                  "Low Phosphorus", "Cold Stress", "Heat Stress"))
+palettedf <- tibble(experiment = ExperimentNames,
+                    palette = c("Greys", "YlGn", "Greens", "Purples", "BuPu", "YlOrBr"),
+                    long_name = LongExperimentNames)
 
 plotClusterPatternByExperiment <- function(.df, .experiment, .title = NULL) {
   plotdf <- summarise(group_by(.df, time_point_num, label),
@@ -192,10 +188,15 @@ plotdf <- finaldf |> select(gene_name, experiment, group4) |>
   pivot_longer(cols = ExperimentNames, names_to = "experiment",
                values_to = "group5") # to add NA values for low expression
 plotdf$group5 <- if_else(is.na(plotdf$group5), true = "lowly expressed",
-                         false = plotdf$group5)
+                         false = plotdf$group5) |> 
+  factor(levels = c("conserved level and dynamics",
+                    "conserved level, diverged dynamics",
+                    "diverged level, conserved dynamics",
+                    "diverged level and dynamics",
+                    "lowly expressed"))
 plotdf$experiment <- factor(plotdf$experiment, levels = ExperimentNames)
 pdf("../paper_figures/EnvironmentalPatterns/stacked_bars.pdf",
-    width = 5, height = 3)
+    width = 6, height = 4)
 ggplot(plotdf, aes(x = experiment)) + 
   geom_bar(aes(fill = group5)) +
   scale_fill_discrete(type = levdyn_colordf$type,
@@ -209,20 +210,33 @@ ggplot(plotdf, aes(x = experiment)) +
 dev.off()
 # Ridgeline plot of log2 fold change in each environment
 library(ggridges)
+plotdf <- filter(finaldf, level == "diverged")
+filter(finaldf, dynamics == "conserved" & level == "conserved") |> group_by(experiment) |> 
+  summarise(n = n())
+# accompanying percentages of upScer and upSpar genes
+pctdf <- plotdf |> group_by(experiment) |> 
+  summarise(pct_upcer = round(sum(effect_size_species > 0)/length(effect_size_species), digits = 2)*100,
+            pct_uppar = round(sum(effect_size_species < 0)/length(effect_size_species), digits = 2)*100,
+            n = length(effect_size_species)) |> 
+  pivot_longer(cols = c("pct_upcer", "pct_uppar"),
+               names_to = "direction", values_to = "pct") |> 
+  mutate(x_pos = if_else(direction == "pct_upcer",
+                         true = 5, false = -5))
+pctdf$y_pos <- sapply(pctdf$experiment, \(e) which(ExperimentNames == e) + 0.5)
 pdf("../paper_figures/EnvironmentalPatterns/ridgeline.pdf",
     width = 4, height = 3)
-plotdf <- filter(finaldf, level == "diverged")
-ggplot(plotdf, aes(x = effect_size_species, y = experiment, fill = experiment)) +
-  geom_density_ridges() +
+ggplot(data = plotdf, aes(x = effect_size_species, y = experiment, fill = experiment)) +
+  geom_density_ridges(data = plotdf) +
+  geom_text(data = pctdf, aes(x = x_pos, y = y_pos, label = paste0(pct, "%"))) +
   theme_classic() +
   theme(legend.position = "none") +
   ylab("") +
-  xlab("log2 fold change\n<- higher in Spar / higher in Scer ->") +
+  xlab("log2 fold change") +
   scale_y_discrete(limits = ExperimentNames, labels = LongExperimentNames)
 dev.off()
 
-# TODO: heatmap of species-specific and reversals of expression plasticity
-plotdf <- finaldf |> filter(dynamics == "diverged") |> 
+# Heatmap of species-specific and reversals of expression plasticity
+plotdf <- finaldf |> # filter(dynamics == "diverged") |> 
   group_by(experiment, cer, par) |> 
   summarise(n = n())
 plotdf$long_experiment <- map(plotdf$experiment, \(e) {
@@ -230,12 +244,31 @@ plotdf$long_experiment <- map(plotdf$experiment, \(e) {
 }) |> factor(levels = LongExperimentNames)
 plotdf$cer <- factor(plotdf$cer, levels = c("0", "1", "2"))
 plotdf$par <- factor(plotdf$par, levels = c("2", "1", "0"))
+plotdf$type <- map2(plotdf$cer, plotdf$par, \(x, y) {
+  if (x == y) {
+    return("conserved")
+  }
+  if (x == 0) {
+    return("Spar-unique")
+  }
+  if (y == 0) {
+    return("Scer-unique")
+  }
+  else {
+    return("reversal")
+  }
+}) |> unlist()
 pdf("../paper_figures/EnvironmentalPatterns/dynamics_counts_heatmap.pdf",
     width = 4, height = 3)
-ggplot(plotdf, aes(x = cer, y = par, fill = n)) +
+ggplot(plotdf, aes(x = cer, y = par, fill = type)) +
   geom_tile() +
-  geom_text(aes(label = n), color = "white") +
-  facet_wrap(~long_experiment) +
+  geom_text(aes(label = n,
+                color = type == "conserved")) +
+  scale_color_discrete(limits = c(TRUE, FALSE),
+                       type = c("grey40", "white")) +
+  scale_fill_discrete(limits = c("conserved", "Scer-unique", "Spar-unique", "reversal"),
+                      type = c("grey60", "orange1", "blue2", "purple")) +
+   facet_wrap(~long_experiment) +
   theme_classic() +
   xlab("Scer dynamics cluster") +
   ylab("Spar dynamics cluster") +
@@ -753,7 +786,7 @@ Heatmap(levmat[, at_least_1_idxs],
 dev.off()
 
 # example level-diverging gene groups across all environments
-# Saturated Growth increasing cluster, up in Scer
+# Diauxic Shift increasing cluster, up in Scer
 gene_idxs <- finaldf |> filter(experiment == "HAP4" & group == "levupcer1") |> 
   select(gene_name) |> pull()
 pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/avg_expr_level.pdf",
@@ -1187,7 +1220,7 @@ plotCoRegGroup <- function(.environment, .clust, .pct = 0.1) {
 # #### Look at most interesting divergence examples in each environment ####
 # 
 # # cer dominance:
-# # Saturated Growth: par up cer/hyc/hyp down (2122 in 2 clust)
+# # Diauxic Shift: par up cer/hyc/hyp down (2122 in 2 clust)
 # plotCode("2 1 2 2", .experiment = "HAP4")
 # # Low Pi: par down cer/hyc/hyp up (1211 in 3 clust)
 # plotCode("1 2 1 1", .experiment = "LowPi")
@@ -2964,7 +2997,7 @@ plotCoRegGroup <- function(.environment, .clust, .pct = 0.1) {
 #                          limits = plotdf$CCM_color) +
 #     scale_x_discrete(breaks = c("CC", "HAP4", "LowN", "LowPi", "Heat", "Cold"),
 #                      limits = c("CC", "HAP4", "LowN", "LowPi", "Heat", "Cold"),
-#                      labels = c("Urea Shock", "Saturated Growth", "Low Nitrogen",
+#                      labels = c("Urea Shock", "Diauxic Shift", "Low Nitrogen",
 #                                 "Low Phosphorus", "Heat Shock", "Cold Shock")) +
 #     ylab("Module similarity between species\n (average expression correlation)") +
 #     xlab("") +
@@ -3032,7 +3065,7 @@ plotCoRegGroup <- function(.environment, .clust, .pct = 0.1) {
 #   xlab("Pearson correlation") + ylab("distance correlation") + 
 #   ggtitle("comparison of two measures of module\n average expression correlation between species") +
 #   scale_shape_discrete(limits = c("CC", "HAP4", "LowN", "LowPi"),
-#                        labels = c("Urea Shock", "Saturated Growth", "Low Nitrogen", "Low Phosphorus")) +
+#                        labels = c("Urea Shock", "Diauxic Shift", "Low Nitrogen", "Low Phosphorus")) +
 #   theme_classic() + xlim(c(-1, 1)) + ylim(c(0, 1)) + geom_abline(slope = 0.5, intercept = 0.5, color = "gold")
 # 
 # # experiment-specific
@@ -3054,7 +3087,7 @@ plotCoRegGroup <- function(.environment, .clust, .pct = 0.1) {
 #   xlab("Pearson correlation") + ylab("distance correlation") + 
 #   ggtitle("comparison of two measures of module\n average expression correlation between species") +
 #   scale_shape_discrete(limits = c("CC", "HAP4", "LowN", "LowPi"),
-#                        labels = c("Urea Shock", "Saturated Growth", "Low Nitrogen", "Low Phosphorus")) +
+#                        labels = c("Urea Shock", "Diauxic Shift", "Low Nitrogen", "Low Phosphorus")) +
 #   theme_classic() + xlim(c(-1, 1)) + ylim(c(0, 1)) + geom_abline(slope = 0.5, intercept = 0.5, color = "gold")
 # dev.off()
 # 

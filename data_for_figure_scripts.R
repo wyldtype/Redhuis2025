@@ -407,6 +407,11 @@ dim(info)
 save(counts_list, info, file = "data_files/Clustering_Counts.RData")
 
 #### Categorizing level and dynamics of all genes ####
+
+# Environment Names, so I only have to change them in one place
+ExperimentNames <- c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold")
+LongExperimentNames <- c("Diauxic Shift", "Cell Cycle", "Low Nitrogen", "Low Phosphate", "Heat Stress", "Cold Stress")
+
 # colors used throughout paper
 levdyn_colordf <- tibble(type = c("salmon", "aquamarine", "gold", "greenyellow", "grey80"),
                          labels = c("conserved level \nand dynamics", 
@@ -428,7 +433,7 @@ load("data_files/Cleaned_Count_Data.RData")
 load("data_files/Cleaned_Counts.RData")
 load("data_files/Cleaned_Counts_Allele.RData")
 rm(counts, sample_info)
-ExperimentNames <- c("CC", "HAP4", "LowN", "LowPi", "Heat", "Cold")
+ExperimentNames <- c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold")
 p_thresh <- 0.05
 eff_thresh <- log2(1.5) # gene needs to be 1.5x higher in one species than the other to be considered DE
 
@@ -667,7 +672,8 @@ finaldf$group <- apply(finaldf, 1, \(x) {
 }) |> unlist()
 
 # saving
-save(finaldf, levdyn_colordf, file = "data_files/FinalDataframe3Disp.RData")
+save(finaldf, levdyn_colordf, ExperimentNames,
+     LongExperimentNames, file = "data_files/FinalDataframe3Disp.RData")
 
 #### Gene Ontology Enrichment ####
 # table of gene ontology terms associated with each gene
