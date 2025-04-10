@@ -1,15 +1,15 @@
 sapply(c("plyr", "dplyr", "purrr", "tidyr", "ggpubr", "readr", "igraph", "Matrix",
          "data.table", "ggplot2", "data.table", "stringr", "ComplexHeatmap"), require, character.only=TRUE)
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025/")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/aligning_the_molecular_phenotype/Redhuis2025/")
 load("data_files/FinalDataframe3Disp.RData")
 load("data_files/Cleaned_Count_Data.RData")
 load("data_files/Cleaned_Counts.RData")
 load("data_files/Cleaned_Counts_Allele.RData")
 source("functions_for_figure_scripts.R")
 
-# regulators are rows
-# targets are columns
-# i,j = 1 means row i regulates row j (could be positive or negative or both depending on regulatory matrix used)
+# Regulators are rows
+# Targets are columns
+# i,j = 1 means i regulates j (could be positive or negative or both depending on regulatory matrix used)
 
 #### Data Organizing - reading in regulatory matrices ####
 # Making one shared gene idx list
@@ -23,7 +23,7 @@ idxs <- map(idxs, \(g) {
   return(g)
 }) |> unlist() |> sort()
 write_delim(tibble(gene_name = idxs),
-            delim = "\n", file = "gene_ontology/all_genes.txt",
+            delim = "\n", file = "yeastract_genes.txt",
             col_names = FALSE)
 
 # reading in table to convert from common to systematic names
@@ -230,8 +230,93 @@ for (r in setdiff(names(regmats), "YPD")) {
 }
 dev.off()
 
-#### Verifying environment sensing in Saturated Growth ####
+#### Genes with conserved dynamics have more regulatory connections ####
+# TODO: stacked barplots from each environment with the following columns:
+#    1) fraction of genes with conserved vs diverged dynamics
+#    2-5) fraction of regulatory connections pointing towards 
+#         genes with conserved vs diverged dynamics
+#         with the following filters:
+#   2) YPD and specific environment connections combined
+#   3) just YPD connections
+#   4) just specific environment connections
+#   5) diverged dynamics are just the reversals
+# Then repeat for second plot but instead of conserved vs diverged, 
+# it's low varying in either species vs not low varying in either species
 
+plotConnectionsBars <- function(.e, .col = "dynamics", .df = finaldf) {
+  low_expr <- setdiff(colnames(regmats[[.e]]), .df[.df$experiment == .e, ]$gene_name)
+  plotdf <- tibble(gene_name = colnames(regmats[[.e]])[!(colnames(regmats[[.e]]) %in% low_expr)],
+                   in_degree_e = colSums(regmats[[.e]])[!(colnames(regmats[[.e]]) %in% low_expr)],
+                   in_degree_YPD = colSums(regmats$YPD)[!(colnames(regmats[[.e]]) %in% low_expr)],
+                   in_degree_full = colSums(regmats[[.e]] + regmats$YPD)[!(colnames(regmats[[.e]]) %in% low_expr)],
+                   n_genes = 1) |> 
+    left_join(filter(.df, experiment == .e),
+              by = "gene_name") |> 
+    mutate(fill_col = .data[[.col]])
+  plotdf_consdiv <- plotdf |> 
+    pivot_longer(cols = c("in_degree_e", "in_degree_YPD", "in_degree_full", "n_genes"),
+                 names_to = "type", values_to = "count") |> group_by(fill_col, type) |> 
+    summarise(in_degree = sum(count)) |> 
+    group_by(type) |> 
+    reframe(n = sum(in_degree), in_degree = in_degree,
+            fill_col = fill_col, type = type) |> 
+    mutate(frac_in_degree = in_degree/n)
+  frac_fill <- plotdf_consdiv |> filter(type == "n_genes") |> select(in_degree) |> pull()
+  frac_fill <- min(frac_fill)/sum(frac_fill)
+  p <- ggplot(plotdf_consdiv, aes(x = type, y = frac_in_degree)) +
+    geom_bar(aes(fill = fill_col), stat = "identity") +
+    geom_hline(yintercept = frac_fill)
+  return(p)
+}
+# conserved dynamics have more regulatory connections
+plotConnectionsBars(.e = "HAP4")
+plotConnectionsBars(.e = "CC")
+plotConnectionsBars(.e = "LowN")
+plotConnectionsBars(.e = "LowPi")
+plotConnectionsBars(.e = "Heat")
+plotConnectionsBars(.e = "Cold")
+# is this more or less pronounced for high varying vs low varying?
+plotConnectionsBars(.e = "HAP4", 
+                    .df = mutate(finaldf, isLow = (cer == 0 | par == 0)),
+                    .col = "isLow")
+plotConnectionsBars(.e = "CC", 
+                    .df = mutate(finaldf, isLow = (cer == 0 | par == 0)),
+                    .col = "isLow")
+plotConnectionsBars(.e = "LowN", 
+                    .df = mutate(finaldf, isLow = (cer == 0 | par == 0)),
+                    .col = "isLow")
+plotConnectionsBars(.e = "LowPi", 
+                    .df = mutate(finaldf, isLow = (cer == 0 | par == 0)),
+                    .col = "isLow")
+plotConnectionsBars(.e = "Heat", 
+                    .df = mutate(finaldf, isLow = (cer == 0 | par == 0)),
+                    .col = "isLow")
+plotConnectionsBars(.e = "Cold", 
+                    .df = mutate(finaldf, isLow = (cer == 0 | par == 0)),
+                    .col = "isLow")
+# more pronounced except for Cold
+# is the pattern still there if we filter out lowvar genes?
+plotConnectionsBars(.e = "HAP4", 
+                    .df = filter(finaldf, !(cer == 0 & par == 0)),
+                    .col = "dynamics")
+plotConnectionsBars(.e = "CC", 
+                    .df = filter(finaldf, !(cer == 0 & par == 0)),
+                    .col = "dynamics")
+plotConnectionsBars(.e = "LowN", 
+                    .df = filter(finaldf, !(cer == 0 & par == 0)),
+                    .col = "dynamics")
+plotConnectionsBars(.e = "LowPi", 
+                    .df = filter(finaldf, !(cer == 0 & par == 0)),
+                    .col = "dynamics")
+plotConnectionsBars(.e = "Heat", 
+                    .df = filter(finaldf, !(cer == 0 & par == 0)),
+                    .col = "dynamics")
+plotConnectionsBars(.e = "Cold", 
+                    .df = filter(finaldf, !(cer == 0 & par == 0)),
+                    .col = "dynamics")
+# yes, except for Cold, it's even more pronounced
+
+#### Verifying environment sensing in Saturated Growth ####
 # verifying that downsampling HAP4 matrix makes for a more organized graph
 downsample_idxs <- sample(c(1:nrow(regmats$HAP4)), 3000, replace = FALSE)
 missing_idxs <- setdiff(1:nrow(regmats$HAP4), downsample_idxs)
@@ -261,7 +346,7 @@ literature_sensors <- yeastract_lookup |> filter(common %in% c("TPK1", "TPK2", "
 setdiff(literature_sensors, colnames(regmats$HAP4))
 literature_sensors <- intersect(literature_sensors, colnames(regmats$HAP4))
 intersect(yeastract_regulators, literature_sensors)
-yeastract_lookup |> filter(systematic %in% literature_sensors)
+yeastract_lookup |> filter(systematic %in% literature_sensors) |> View()
 # Note: even when not requiring there to be DNA binding evidence, there is a bias 
 # for interactions where the regulator is a transcription factor that regulates expression via DNA binding---
 # the TORs, PKAs, and RIM15 are all kinases that don't bind DNA and don't have any yeastract binding interactions
