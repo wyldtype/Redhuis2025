@@ -138,9 +138,9 @@ collapseReplicates <- function(.info, .cts) {
 #             color = "red") # these are genes with very little expression change attributable to timepoint,
 # # the exact kind we want to have significantly reduced variance in collapsed counts
 
-#### Taking moving averages of Low Phosphorus and Saturated Growth ####
+#### Taking moving averages of Low Phosphorus and Diauxic Shift ####
 
-# rationale: Low Pi and Saturated Growth experiments needs to have expression
+# rationale: Low Pi and Diauxic Shift experiments needs to have expression
 # smoothed as moving average b/c there are not replicates
 
 # taking moving average
@@ -288,7 +288,7 @@ plotExpressionProfilePair <- function(.cts1, .cts2,
   }
   # background color rectangles for differentiating the experiments
   rects <- data.frame(color = c("orchid", "lightgreen", "gold", "orange", "salmon", "lightblue"),
-                  labels = c("Cell Cycle", "Saturated Growth", "Low Nitrogen", "Low Phosphorus", "Heat Stress", "Cold Stress"),
+                  labels = c("Cell Cycle", "Diauxic Shift", "Low Nitrogen", "Low Phosphorus", "Heat Stress", "Cold Stress"),
                   experiment_names = c("CC", "HAP4", "LowN", "LowPi", "Heat", "Cold"))
   experiment_order <- c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold")
   # plotting
@@ -541,7 +541,7 @@ plotExpressionRibbonsPair <- function(.cts1, .cts2,
   experiment_order <- c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold")
   # background color rectangles for differentiating the experiments
   rects <- data.frame(color = c("orchid", "lightgreen", "gold", "orange", "salmon", "lightblue"),
-                      labels = c("Cell Cycle", "Saturated Growth", "Low Nitrogen", "Low Phosphorus", "Heat Stress", "Cold Stress"),
+                      labels = c("Cell Cycle", "Diauxic Shift", "Low Nitrogen", "Low Phosphorus", "Heat Stress", "Cold Stress"),
                       experiment_names = c("CC", "HAP4", "LowN", "LowPi", "Heat", "Cold"))
   # plotting
   plotlist <- vector(mode = "list", length = length(unique(plotdf$experiment)))
@@ -769,7 +769,7 @@ plotExpressionProfileQuartet <- function(.cts1, .cts2, .cts3, .cts4,
   plotdf <- gdf
   # background color rectangles for differentiating the 4 experiments
   rects <- data.frame(color = c("lightgreen", "orchid", "gold", "orange", "salmon", "lightblue"),
-                      labels = c("Saturated Growth", "Cell Cycle", "Low Nitrogen", "Low Phosphorus", "Heat Stress", "Cold Stress"),
+                      labels = c("Diauxic Shift", "Cell Cycle", "Low Nitrogen", "Low Phosphorus", "Heat Stress", "Cold Stress"),
                       experiment_names = c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold"))
   # plotting
   plotlist <- vector(mode = "list", length = length(unique(plotdf$experiment)))
@@ -2687,7 +2687,7 @@ getGOSlimDf <- function(.idxs, .group_name, .file_prefix = "gene_ontology/result
 #     summarise(expr = mean(expr)) |> ungroup()
 #   # background color rectangles for differentiating the 4 experiments
 #   rects <- data.frame(color = c("orchid", "lightgreen", "gold", "lightblue"),
-#                       labels = c("Urea Shock", "Saturated Growth", "Low Nitrogen", "Low Phosphorus"),
+#                       labels = c("Urea Shock", "Diauxic Shift", "Low Nitrogen", "Low Phosphorus"),
 #                       experiment_names = c("CC", "HAP4", "LowN", "LowPi"))
 #   rownames(rects) <- c("CC", "HAP4", "LowN", "LowPi")
 #   rects <- rects[ExperimentNames,] # ensuring experiments are in same order as input dataset
@@ -2852,7 +2852,7 @@ getGOSlimDf <- function(.idxs, .group_name, .file_prefix = "gene_ontology/result
 #     summarise(expr = mean(expr)) |> ungroup()
 #   # background color rectangles for differentiating the 4 experiments
 #   rects <- data.frame(color = c("orchid", "lightgreen", "gold", "lightblue"),
-#                       labels = c("Urea Shock", "Saturated Growth", "Low Nitrogen", "Low Phosphorus"),
+#                       labels = c("Urea Shock", "Diauxic Shift", "Low Nitrogen", "Low Phosphorus"),
 #                       experiment_names = c("CC", "HAP4", "LowN", "LowPi"))
 #   rownames(rects) <- c("CC", "HAP4", "LowN", "LowPi")
 #   rects <- rects[ExperimentNames,] # ensuring experiments are in same order as input dataset

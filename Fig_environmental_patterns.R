@@ -43,7 +43,7 @@ display.brewer.all()
 load("data_files/CorrelationClustering3Disp.RData")
 # color palettes we'll use for the 6 environments
 palettedf <- tibble(experiment = ExperimentNames,
-                    palette = c("Greys", "YlGn", "Greens", "Purples", "BuPu", "YlOrBr"),
+                    palette = c("Greys", "YlGn", "Greens", "Purples", "YlOrBr", "BuPu"),
                     long_name = LongExperimentNames)
 
 plotClusterPatternByExperiment <- function(.df, .experiment, .title = NULL) {
@@ -266,8 +266,8 @@ ggplot(plotdf, aes(x = cer, y = par, fill = type)) +
                 color = type == "conserved")) +
   scale_color_discrete(limits = c(TRUE, FALSE),
                        type = c("grey40", "white")) +
-  scale_fill_discrete(limits = c("conserved", "Scer-unique", "Spar-unique", "reversal"),
-                      type = c("grey60", "orange1", "blue2", "purple")) +
+  scale_fill_discrete(limits = colordf[colordf$scheme == "dynamics",]$limits,
+                      type = colordf[colordf$scheme == "dynamics",]$type) +
    facet_wrap(~long_experiment) +
   theme_classic() +
   xlab("Scer dynamics cluster") +
@@ -1145,7 +1145,7 @@ dev.off()
 
 #### Example expression profiles for figure ####
 # Low Phosphorus 1-2, dynamics divergers
-gene_idxs <- finaldf |> filter(experiment == "LowPi" & group == "dyn12") |> 
+gene_idxs <- finaldf |> filter(experiment == "LowPi" & cer == 1 & par == 2) |> 
   select(gene_name) |> pull()
 pdf("../../aligning_the_molecular_phenotype/paper_figures/EnvironmentalPatterns/LowPi12.pdf",
     width = 12, height = 2)

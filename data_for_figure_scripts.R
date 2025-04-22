@@ -11,18 +11,18 @@ load("data_files/Cleaned_Count_Data_AlleleSpecific.RData")
 #### filtering low expr ####
 cutoffExpr <- 30
 
-# # Yeastract highly connected genes that are unannotated/filtered out for low expression:
-# MissingHubGenes <- c("YBR240C", "YCL058C", "YCR106W", "YDR123C", "YER109C", "YER111C", "YER184C",
-#                      "YFL052W", "YGL254W", "YGR288W", "YHR124W", "YJL127C", "YJR094C", "YKL222C",
-#                      "YLR013W", "YLR176C", "YLR256W", "YLR266C", "YNR063W", "YOL028C", "YOR113W",
-#                      "YOR380W", "YPL248C", "YPL133C", "YPR196W", "YJL056C")
-# MissingHubGenes[!(MissingHubGenes %in% rownames(counts))]
+# Yeastract highly connected genes that are unannotated/filtered out for low expression:
+MissingHubGenes <- c("YBR240C", "YCL058C", "YCR106W", "YDR123C", "YER109C", "YER111C", "YER184C",
+                     "YFL052W", "YGL254W", "YGR288W", "YHR124W", "YJL127C", "YJR094C", "YKL222C",
+                     "YLR013W", "YLR176C", "YLR256W", "YLR266C", "YNR063W", "YOL028C", "YOR113W",
+                     "YOR380W", "YPL248C", "YPL133C", "YPR196W", "YJL056C")
+MissingHubGenes[!(MissingHubGenes %in% rownames(counts))]
 # All 4 unannotated genes have different CDS in Scer than other Saccharomyces:
-# FYV5 (de novo gene), FLO8 (truncated in Scer s288c), 
+# FYV5 (de novo gene), FLO8 (truncated in Scer s288c),
 # HAP1 (ty1 insertion), and YAP7 (indel in Scer)
 # changing to non-log2 scale for actual filtering (log2 scale is for visualizing)
-# MissingHubGenes <- intersect(rownames(counts), MissingHubGenes)
-# rowMeans(counts[MissingHubGenes,]) # remaining 22 are all lowly expressed
+MissingHubGenes <- intersect(rownames(counts), MissingHubGenes)
+rowMeans(counts[MissingHubGenes,]) # remaining 22 are all lowly expressed
 
 # Criteria: mean expr less than threshold (30 cpm, not log scale) in
 # cer, par, hyc, and hyp in all experiments
@@ -413,7 +413,7 @@ ExperimentNames <- c("HAP4", "CC", "LowN", "LowPi", "Heat", "Cold")
 LongExperimentNames <- c("Diauxic Shift", "Cell Cycle", "Low Nitrogen", "Low Phosphate", "Heat Stress", "Cold Stress")
 
 # colors used throughout paper
-levdyn_colordf <- tibble(type = c("salmon", "aquamarine", "gold", "greenyellow", "grey80"),
+group4_colordf <- tibble(type = c("salmon", "aquamarine", "gold", "greenyellow", "grey80"),
                          labels = c("conserved level \nand dynamics", 
                                     "conserved level, \ndiverged dynamics", 
                                     "diverged level, \nconserved dynamics", 
@@ -423,7 +423,17 @@ levdyn_colordf <- tibble(type = c("salmon", "aquamarine", "gold", "greenyellow",
                                     "conserved level, diverged dynamics", 
                                     "diverged level, conserved dynamics", 
                                     "diverged level and dynamics",
-                                    "lowly expressed"))
+                                    "lowly expressed"),
+                         scheme = "group4")
+experiment_colordf <- tibble(type = c("grey", "yellow", "green", "purple", "red", "blue"),
+                                               labels = LongExperimentNames,
+                                               limits = ExperimentNames,
+                                               scheme = "experiment")
+dynamics_colordf <- tibble(type = c("grey60", "grey20", "orange1", "blue2", "purple"),
+                           labels = c("conserved plastic", "conserved static", "Scer-unique plasticity", "Spar-unique plasticity", "plasticity reversal"),
+                           limits = c("conserved plastic", "conserved static", "Scer-unique", "Spar-unique", "reversal"),
+                           scheme = "dynamics")
+colordf <- bind_rows(group4_colordf, experiment_colordf, dynamics_colordf)
 
 # Running the following section requires running the clustering.R 
 # and single_gene_model_construction_and_QC>R scripts first
@@ -537,6 +547,35 @@ finaldf$cor_spar <- map2(finaldf$gene_name, finaldf$experiment, getCorelation,
                          .cts2 = collapsed$par,
                          .info1 = info_allele,
                          .info2 = info) |> unlist()
+
+### Calculating mean/var expression across both species
+getMean <- function(.gene_name, .experiment, 
+                   .cts, .info) {
+  output <- rowMeans(.cts[.gene_name, .info$experiment == .experiment, drop = FALSE])
+  return(as.numeric(output))
+}
+# tests for getMean
+getMean("YGR192C", "HAP4",
+        .cts = counts,
+        .info = sample_info)
+
+getVar <- function(.gene_name, .experiment, 
+                    .cts, .info) {
+  output <- rowVars(.cts[.gene_name, .info$experiment == .experiment, drop = FALSE])
+  return(as.numeric(output))
+}
+# tests for getVar
+getVar("YGR192C", "HAP4",
+        .cts = counts,
+        .info = sample_info)
+
+# adding mean/var columns
+finaldf$mean_parents <- map2(finaldf$gene_name, finaldf$experiment, getMean,
+                             .cts = counts,
+                             .info = sample_info) |> unlist()
+finaldf$var_parents <- map2(finaldf$gene_name, finaldf$experiment, getVar,
+                             .cts = counts,
+                             .info = sample_info) |> unlist()
 
 ### Checking allele mapping bias in individual genes
 # adding bias column to finaldf
@@ -672,7 +711,7 @@ finaldf$group <- apply(finaldf, 1, \(x) {
 }) |> unlist()
 
 # saving
-save(finaldf, levdyn_colordf, ExperimentNames,
+save(finaldf, colordf, ExperimentNames,
      LongExperimentNames, file = "data_files/FinalDataframe3Disp.RData")
 
 #### Gene Ontology Enrichment ####

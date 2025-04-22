@@ -7,8 +7,46 @@ load("data_files/Cleaned_Counts_Allele.RData")
 cor_thresh <- 0.8
 eff_thresh <- log2(1.5)
 
-#### Divergence in level is preserved in the hybrid ####
+#### Same examples as environmental patterns, just including hybrid ####
+gene_idxs <- finaldf |> filter(experiment == "Heat" & cer == 2 & par == 1) |> 
+  select(gene_name) |> pull()
+pdf("../../aligning_the_molecular_phenotype/paper_figures/CisTrans/Heat21.pdf",
+    width = 12, height = 2)
+plotExpressionProfileQuartet(.cts1 = collapsed$cer[gene_idxs,],
+                             .cts2 = collapsed$par[gene_idxs,],
+                             .cts3 = collapsed_allele$cer[gene_idxs,],
+                             .cts4 = collapsed_allele$par[gene_idxs,],
+                             .info1 = info,
+                             .info2 = info,
+                             .info3 = info_allele,
+                             .info4 = info_allele,
+                             .method = "line",
+                             .show_points = FALSE,
+                             .show_confidence_intervals = TRUE,
+                             .normalization = "log2")
+dev.off()
 
+# upPar Diauxic Shift, level divergers
+gene_idxs <- finaldf |> filter(experiment == "HAP4" & level == "diverged" &
+                                 sign(effect_size_species) == -1) |> 
+  select(gene_name) |> pull()
+pdf("../../aligning_the_molecular_phenotype/paper_figures/CisTrans/HAP4_uppar.pdf",
+    width = 12, height = 2)
+plotExpressionProfileQuartet(.cts1 = collapsed$cer[gene_idxs,],
+                             .cts2 = collapsed$par[gene_idxs,],
+                             .cts3 = collapsed_allele$cer[gene_idxs,],
+                             .cts4 = collapsed_allele$par[gene_idxs,],
+                             .info1 = info,
+                             .info2 = info,
+                             .info3 = info_allele,
+                             .info4 = info_allele,
+                             .method = "line",
+                             .show_points = FALSE,
+                             .show_confidence_intervals = TRUE,
+                             .normalization = "log2")
+dev.off()
+
+#### Divergence in level is preserved in the hybrid ####
 # R squared for effect sizes between parents and hybrid for all genes
 mod_full <- lm(effect_size_allele ~ effect_size_species, data = finaldf)
 summary(mod_full)
@@ -21,19 +59,39 @@ plotdf <- finaldf |> filter(gene_name %in% levdiv_genes) |>
 mod <- lm(effect_size_allele ~ effect_size_species, data = filter(finaldf, gene_name %in% plotdf$gene_name))
 summary(mod) # more correlated for genes with the most consistent level divergence across envrironments
 
-# observation from average expression: level divergers are way
-# more likely to have hybrid l2fc in same direction as parents
-# can we confirm this?
-ggplot(finaldf, aes(x = effect_size_species,
-                    y = effect_size_allele)) +
-  geom_point(aes(color = group4)) +
-  scale_color_discrete(breaks = levdyn_colordf$limits,
-                       type = levdyn_colordf$type,
-                       limits = levdyn_colordf$limits) +
-  facet_wrap(~group4) +
-  xlim(c(-5, 5)) +
-  ylim(c(-5, 5))
+# looping through each experiment
 library(ggExtra)
+plotlist <- vector(mode = "list", length = length(ExperimentNames))
+names(plotlist) <- ExperimentNames
+for (e in ExperimentNames) {
+  plotdf <- finaldf |> filter(experiment == e & level == "diverged")
+  mod_e <- lm(effect_size_allele ~ effect_size_species, data = plotdf)
+  plotlist[[e]] <- ggMarginal(ggplot(plotdf, aes(x = effect_size_species,
+                                 y = effect_size_allele)) +
+               geom_vline(xintercept = 0, alpha = 0.5) +
+               geom_hline(yintercept = 0, alpha = 0.5) +
+               geom_abline(slope = 1, intercept = 0, alpha = 0.5) +
+               geom_point(aes(color = experiment)) +
+               geom_text(x = -2, y = 4.5, 
+                         label = paste0("R^2 = ", round(summary(mod_e)$r.squared,
+                                                        digits = 3))) +
+               scale_color_discrete(limits = colordf[colordf$scheme == "experiment",]$limits,
+                                    type = colordf[colordf$scheme == "experiment",]$type) +
+               xlim(c(-5, 5)) +
+               ylim(c(-5, 5)) +
+               xlab("") +
+               ylab("") +
+               ggtitle(LongExperimentNames[which(ExperimentNames == e)]) +
+               theme_classic() +
+               theme(legend.position = "none"),
+             groupColour = TRUE, groupFill = TRUE)
+}
+pdf("../paper_figures/CisTrans/l2fc_eachEnvironment.pdf",
+    width = 5, height = 8)
+ggarrange(plotlist = plotlist, nrow = 3, ncol = 2)
+dev.off()
+
+# all environments
 pdf("../paper_figures/CisTrans/l2fc_allEnvironments.pdf",
     width = 5, height = 5)
 ggMarginal(ggplot(finaldf, aes(x = effect_size_species,
@@ -92,6 +150,38 @@ annotate_figure(plotGenes(.gene_idxs = uppar_cis_idxs, .quartet = TRUE,
 dev.off()
 
 #### Dynamics divergence is not well preserved in the hybrid ####
+plotlist <- vector(mode = "list", length = length(ExperimentNames))
+names(plotlist) <- ExperimentNames
+# density plots of parental vs hybrid cor in each environment
+for (e in ExperimentNames) {
+  plotdf <- finaldf |> filter(experiment == e & dynamics == "diverged") |> 
+    select(gene_name, experiment, cor_parents, cor_hybrid) |> 
+    pivot_longer(cols = c("cor_parents", "cor_hybrid"), 
+                 names_to = "parent_or_hybrid",
+                 values_to = "cor")
+  plotlist[[e]] <- ggplot(plotdf, aes(x = cor)) + 
+    geom_density(data = filter(plotdf, parent_or_hybrid == "cor_parents"), 
+                 aes(fill = experiment), alpha = 1, color = "white") +
+    geom_density(data = filter(plotdf, parent_or_hybrid == "cor_hybrid"), 
+                 aes(fill = experiment), alpha = 0.5, color = "black") +
+    scale_fill_discrete(limits = colordf[colordf$scheme == "experiment",]$limits,
+                        type = colordf[colordf$scheme == "experiment",]$type) +
+    xlim(c(-1, 1)) +
+    xlab("") +
+    ylab("") +
+    ggtitle(LongExperimentNames[which(ExperimentNames == e)]) +
+    theme_classic() +
+    theme(legend.position = "none")
+}
+p_null <- ggplot(plotdf) + theme_void()
+pdf("../paper_figures/CisTrans/cor_eachEnvironment.pdf",
+    width = 8, height = 4)
+ggarrange(plotlist[[1]], plotlist[[2]],
+          p_null, p_null, plotlist[[3]], plotlist[[4]],
+          plotlist[[5]], plotlist[[6]], nrow = 2, ncol = 4)
+dev.off()
+
+# scatter plot version
 pdf("../paper_figures/CisTrans/cor_allEnvironments.pdf",
     width = 5, height = 5)
 plotdf <- filter(finaldf, dynamics == "diverged" & cer != 0 & par != 0)
@@ -174,6 +264,194 @@ plotGenes(gene_idxs, .experiment_name = "Cold")
 
 # Overall conclusion: Single timepoints in heat/cold caused groups of genes
 # to be put in diverging dynamics clusters while still being correlated at the 3 other timepoints
+
+#### Supp part I: Trans-est level divergers have weakest parental fold change ####
+trans_thresh <- 0.25
+# level
+plotdf <- finaldf |> filter(level == "diverged") |> 
+  mutate(is_trans = abs(effect_size_allele) < trans_thresh) |> 
+  select(gene_name, experiment, effect_size_species, is_trans)
+plotdf$experiment <- factor(plotdf$experiment, levels = ExperimentNames)
+pdf("../paper_figures/Supplement/transest_level_boxplots.pdf",
+    width = 5, height = 4)
+ggplot(plotdf, aes(x = interaction(is_trans, experiment),
+                   y = abs(effect_size_species))) + 
+  geom_boxplot(aes(fill = experiment)) +
+  scale_fill_discrete(limits = colordf[colordf$scheme == "experiment",]$limits,
+                      type = colordf[colordf$scheme == "experiment",]$type) +
+  xlab("") +
+  ylab("abs(log2 fold change) between species") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 1))
+dev.off()
+
+### Avg expression of transest vs. the restest level  genes in each environment
+# upCer
+plotlims <- c(5, 8)
+plotlist <- vector(mode = "list", length = length(ExperimentNames))
+names(plotlist) <- ExperimentNames
+for (e in ExperimentNames) {
+  trans_levdiv_idxs <- finaldf |> filter(level == "diverged" &
+                                         effect_size_species > 0 &
+                                         experiment == e &
+                                         effect_size_allele < trans_thresh) |> 
+    select(gene_name) |> pull() |> unique()
+  rest_levdiv_idxs <- finaldf |> filter(level == "diverged" &
+                                          effect_size_species > 0 &
+                                          experiment == e &
+                                          effect_size_allele >= trans_thresh) |> 
+    select(gene_name) |> pull() |> unique()
+  plotlist[[e]] <- annotate_figure(ggarrange(annotate_figure(plotGenes(.gene_idxs = trans_levdiv_idxs, .quartet = TRUE,
+                                                                       .experiment_name = e, .plotlims = plotlims), 
+                                                             top = paste("hyb f.c. <", trans_thresh, ",", length(trans_levdiv_idxs), "genes")),
+                                             annotate_figure(plotGenes(.gene_idxs = rest_levdiv_idxs, .quartet = TRUE,
+                                                                       .experiment_name = e, .plotlims = plotlims), 
+                                                             top = paste("hyb f.c. >=", trans_thresh, ",", length(rest_levdiv_idxs), "genes"))),
+                                   top = e)
+}
+pdf("../paper_figures/Supplement/transest_upcer_avgExpr.pdf",
+    width = 5, height = 15)
+ggarrange(plotlist = plotlist, ncol = 1, nrow = length(ExperimentNames))
+dev.off()
+# upPar
+plotlims <- c(5, 9)
+plotlist <- vector(mode = "list", length = length(ExperimentNames))
+names(plotlist) <- ExperimentNames
+for (e in ExperimentNames) {
+  trans_levdiv_idxs <- finaldf |> filter(level == "diverged" &
+                                           effect_size_species < 0 &
+                                           experiment == e &
+                                           effect_size_allele > -trans_thresh) |> 
+    select(gene_name) |> pull() |> unique()
+  rest_levdiv_idxs <- finaldf |> filter(level == "diverged" &
+                                          effect_size_species < 0 &
+                                          experiment == e &
+                                          effect_size_allele <= -trans_thresh) |> 
+    select(gene_name) |> pull() |> unique()
+  plotlist[[e]] <- annotate_figure(ggarrange(annotate_figure(plotGenes(.gene_idxs = trans_levdiv_idxs, .quartet = TRUE,
+                                                                       .experiment_name = e, .plotlims = plotlims), 
+                                                             top = paste("hyb f.c. >", -trans_thresh, ",", length(trans_levdiv_idxs), "genes")),
+                                             annotate_figure(plotGenes(.gene_idxs = rest_levdiv_idxs, .quartet = TRUE,
+                                                                       .experiment_name = e, .plotlims = plotlims), 
+                                                             top = paste("hyb f.c. <=", -trans_thresh, ",", length(rest_levdiv_idxs), "genes"))),
+                                   top = e)
+}
+pdf("../paper_figures/Supplement/transest_uppar_avgExpr.pdf",
+    width = 5, height = 15)
+ggarrange(plotlist = plotlist, ncol = 1, nrow = length(ExperimentNames))
+dev.off()
+
+#### Supp part II: Cis-est dynamics divergers have weakest parental correlation ####
+cis_thresh <- 0.5
+# dynamics, weaker mean expr
+plotdf <- finaldf |> filter(dynamics == "diverged") |> 
+  mutate(is_cis = cor_hybrid < cis_thresh) |> 
+  select(gene_name, experiment, mean_parents, is_cis) |> drop_na()
+plotdf$experiment <- factor(plotdf$experiment, levels = ExperimentNames)
+p_mean <- ggplot(plotdf, aes(x = interaction(is_cis, experiment),
+                             y = log2(mean_parents))) + 
+  geom_boxplot(aes(fill = experiment)) +
+  scale_fill_discrete(limits = colordf[colordf$scheme == "experiment",]$limits,
+                      type = colordf[colordf$scheme == "experiment",]$type) +
+  xlab("") +
+  ylab("average expression") +
+  ggtitle("mean") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 1))
+# dynamics, weaker var expr
+plotdf <- finaldf |> filter(dynamics == "diverged") |> 
+  mutate(is_cis = cor_hybrid < cis_thresh) |> 
+  select(gene_name, experiment, var_parents, is_cis) |> drop_na()
+plotdf$experiment <- factor(plotdf$experiment, levels = ExperimentNames)
+p_var <- ggplot(plotdf, aes(x = interaction(is_cis, experiment),
+                             y = log2(var_parents))) + 
+  geom_boxplot(aes(fill = experiment)) +
+  scale_fill_discrete(limits = colordf[colordf$scheme == "experiment",]$limits,
+                      type = colordf[colordf$scheme == "experiment",]$type) +
+  xlab("") +
+  ylab("expression variance") +
+  ggtitle("variance") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 0.5, vjust = 1))
+pdf("../paper_figures/Supplement/cisest_dynamics_boxplots.pdf",
+    width = 10, height = 4)
+ggarrange(p_mean, p_var, nrow = 1, ncol = 2, common.legend = TRUE)
+dev.off()
+
+### Avg expression of cisest vs. the restest dynamics diverging genes in each environment
+# 1-2 divergers
+plotlist <- vector(mode = "list", length = length(ExperimentNames))
+names(plotlist) <- ExperimentNames
+# manually setting comparable y-axes for each pair
+plotlimdf <- tibble(experiment = ExperimentNames,
+                    ymin = c(5, 5, 7, 5, 5, 5),
+                    ymax = c(8, 8.5, 8.5, 8, 8.5, 9))
+for (e in ExperimentNames) {
+  cis_dyndiv_idxs <- finaldf |> filter(cer == 1 & par == 2 &
+                                         experiment == e &
+                                         cor_hybrid < cis_thresh) |> 
+    select(gene_name) |> pull() |> unique()
+  rest_dyndiv_idxs <- finaldf |> filter(cer == 1 & par == 2 &
+                                          experiment == e &
+                                          cor_hybrid >= cis_thresh) |> 
+    select(gene_name) |> pull() |> unique()
+  plotlims <- plotlimdf[plotlimdf$experiment == e, c("ymin", "ymax")] |> as.numeric()
+  plotlist[[e]] <- annotate_figure(ggarrange(annotate_figure(plotGenes(.gene_idxs = cis_dyndiv_idxs, .quartet = TRUE,
+                                                                       .experiment_name = e, .plotlims = plotlims), 
+                                                             top = paste("hyb cor <", cis_thresh, ",", length(cis_dyndiv_idxs), "genes")),
+                                             annotate_figure(plotGenes(.gene_idxs = rest_dyndiv_idxs, .quartet = TRUE,
+                                                                       .experiment_name = e, .plotlims = plotlims), 
+                                                             top = paste("hyb cor >=", cis_thresh, ",", length(rest_dyndiv_idxs), "genes"))),
+                                   top = e)
+}
+pdf("../paper_figures/Supplement/cisest_12_avgExpr.pdf",
+    width = 5, height = 15)
+ggarrange(plotlist = plotlist, ncol = 1, nrow = length(ExperimentNames))
+dev.off()
+# 2-1 divergers
+# manually setting comparable y-axes for each pair
+plotlimdf <- tibble(experiment = ExperimentNames,
+                    ymin = c(5.5, 5, 6.5, 5, 5, 5),
+                    ymax = c(8.5, 10, 8.5, 8, 8.5, 9))
+plotlist <- vector(mode = "list", length = length(ExperimentNames))
+names(plotlist) <- ExperimentNames
+for (e in ExperimentNames) {
+  cis_dyndiv_idxs <- finaldf |> filter(cer == 2 & par == 1 &
+                                        experiment == e &
+                                        cor_hybrid < cis_thresh) |> 
+    select(gene_name) |> pull() |> unique()
+  rest_dyndiv_idxs <- finaldf |> filter(cer == 2 & par == 1 &
+                                        experiment == e &
+                                        cor_hybrid >= cis_thresh) |> 
+    select(gene_name) |> pull() |> unique()
+  plotlims <- plotlimdf[plotlimdf$experiment == e, c("ymin", "ymax")] |> as.numeric()
+  plotlist[[e]] <- annotate_figure(ggarrange(annotate_figure(plotGenes(.gene_idxs = cis_dyndiv_idxs, .quartet = TRUE,
+                                                       .experiment_name = e, .plotlims = plotlims), 
+                                             top = paste("hyb cor <", cis_thresh, ",", length(cis_dyndiv_idxs), "genes")),
+                             annotate_figure(plotGenes(.gene_idxs = rest_dyndiv_idxs, .quartet = TRUE,
+                                                       .experiment_name = e, .plotlims = plotlims), 
+                                             top = paste("hyb cor >=", cis_thresh, ",", length(rest_dyndiv_idxs), "genes"))),
+                             top = e)
+}
+pdf("../paper_figures/Supplement/cisest_21_avgExpr.pdf",
+    width = 5, height = 15)
+ggarrange(plotlist = plotlist, ncol = 1, nrow = length(ExperimentNames))
+dev.off()
+
+# solid, cis-varying upCer level genes, ID'd in LowPi
+cisdyndiv_idxs <- finaldf |> filter(cor_hybrid < 0 &
+                                      experiment == e & 
+                                      cer == 2 & par == 1) |> 
+  select(gene_name) |> pull() |> unique()
+pdf("../paper_figures/CisTrans/cis_dynamics_example.pdf",
+    width = 3, height = 3)
+annotate_figure(plotGenes(.gene_idxs = cisdyndiv_idxs, .quartet = TRUE,
+                          .experiment_name = e, .plotlims = plotlims), 
+                top = paste(e, length(cisdyndiv_idxs), "genes"))
+dev.off()
+
+### Average expression of a diverging gene group in each environment
+# (especially comparing LowN and Heat to other experiments, b/c those ones don't show the pattern)
 
 #### Trans-varying plasticity shows parental dominance in some environments ####
 
