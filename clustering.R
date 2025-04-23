@@ -70,7 +70,7 @@ corCluster <- function(.cts, .nClust, .min_var = var_thresh,
   gene_disps <- apply(.cts, 1, \(x) {var(x, na.rm = TRUE)/abs(mean(x, na.rm = TRUE))})
   gene_disps[gene_means == 0] <- 0 # avoiding divide by 0 NaN if gene is fully not expressed
   # identifying low var and low expr genes
-  low_var_genes <- gene_idxs[gene_disps <= .min_var]
+  low_var_genes <- gene_idxs[gene_disps < .min_var]
   cat(length(low_var_genes), "low variance genes, assigned to 0 label\n")
   good_clustering_genes <- setdiff(x = gene_idxs, y = low_var_genes)
   filtered_cts <- .cts[good_clustering_genes,]
@@ -142,13 +142,13 @@ ggplot(toydf, aes(x = time_point_str, y = log2(expr + 1))) +
   facet_wrap(~label)
 
 # full dataset
-toy_mat <- counts_list$cer_HAP4
+toy_mat <- counts_list$cer_LowN
 toydf <- makeDf(toy_mat, info, .join_by = "condition")
 # no bootstrap
-test_labels <- corCluster(toy_mat, .nClust = 2, .min_var = 2,
+test_labels <- corCluster(toy_mat, .nClust = 4, .min_var = 2,
                           .bootstrapIter = 0)
 # yes bootstrap
-test_labels <- corCluster(toy_mat, .nClust = 2, .min_var = 2,
+test_labels <- corCluster(toy_mat, .nClust = 4, .min_var = 2,
                           .bootstrapIter = 10)
 plotdf <- toydf |> 
   group_by(gene_name, time_point_str) |> 
@@ -323,6 +323,13 @@ abline(a = mod$coefficients[1],
 # to filter out lowly varying genes, we apply disp threshold after the expr threshold
 # the higher you're expressed, the more you need to vary in order to not be put in low var category
 abline(a = 0, b = log2(var_thresh), col = "blue") 
+# CC
+toy_mat_collapsed <- getCollapsedCountsByExperiment("CC")
+plot(log2(rowMeans(toy_mat_collapsed)), log2(rowVars(toy_mat_collapsed)))
+mod <- lm(log2(rowVars(toy_mat_collapsed) + 1) ~ log2(rowMeans(toy_mat_collapsed) + 1))
+abline(a = mod$coefficients[1], 
+       b = mod$coefficients[2], col = "gold") 
+abline(a = 0, b = log2(var_thresh), col = "blue")
 # LowN
 toy_mat_collapsed <- getCollapsedCountsByExperiment("LowN")
 plot(log2(rowMeans(toy_mat_collapsed)), log2(rowVars(toy_mat_collapsed)))
@@ -359,7 +366,7 @@ toy_idxs <- sample(rownames(counts_list$cer_CC), 1000, replace = FALSE)
 toy_mat <- counts_list$cer_CC[toy_idxs,]
 toydf <- makeDf(toy_mat, .info = info, .join_by = "condition")
 labelsdf <- corCluster(toy_mat, .nClust = 4, 
-                       .min_var = 0, .bootstrapIter = 0) # no 0 or NA genes, for comparability, as those thresholds will be different
+                       .min_var = 0, .bootstrapIter = 0) # no 0 genes, for comparability, as those thresholds will be different
 table(labelsdf$label, useNA = "always")
 labelsdf <- rename(labelsdf, "unscaled"="label")
 
@@ -378,7 +385,7 @@ toy_mat <- counts_list$cer_CC[toy_idxs,]
 toydf <- makeDf(toy_mat, .info = info, .join_by = "condition")
 toy_mat_scaled <- scaleGene(toy_mat)
 labelsdf_after <- corCluster(toy_mat_scaled, .nClust = 4, 
-                             .min_var = 0, .bootstrapIter = 0)
+                             .min_var = -1, .bootstrapIter = 0)
 table(labelsdf_after$label, useNA = "always")
 labelsdf <- left_join(labelsdf, rename(labelsdf_after, "after"="label"),
                       by = "gene_name")
@@ -395,11 +402,13 @@ labelsdf <- left_join(labelsdf, rename(labelsdf_before, "before"="label"),
 # View(labelsdf)
 apply(select(labelsdf, -one_of("gene_name")), 1, n_distinct) |> 
   table() 
+# which ones (if any) aren't equal?
+labelsdf[apply(labelsdf[,-1], 1, \(x) {length(table(x)) != 1}),]
 # conclusion: scaling doesn't affect clustering 
 # (but it will affect which genes are flagged as low var or 
 # low expression if you don't change thresholds)
 
-#### Choosing number of clusters per experiment ####
+#### Finding best number of clusters per experiment ####
 findTreeDropoff <- function(.tree_heights, .kmax) {
   heightdiffs <- sort(.tree_heights, decreasing = TRUE)[1:(.kmax - 1)] - 
     sort(.tree_heights, decreasing = TRUE)[2:.kmax]
@@ -455,7 +464,7 @@ treedf$nclust[which.max(treedf$branchdiffs)] # 3 clusters
 #                                  .nClust = 3, .bootstrapIter = 100)
 # plotClusters(Cold_output, .nDownsample = 0)
 
-# Cell Cycle, 2 clusters
+# Cell Cycle, 3 clusters
 tree_test <- clusterCountsList(counts_list[grepl("CC", names(counts_list))],
                                .tree_too = TRUE, .bootstrapIter = 0)
 plot(tree_test$tree, labels = FALSE)
@@ -480,8 +489,6 @@ treedf$nclust[which.max(treedf$branchdiffs)] # 3 clusters
 # plotClusters(LowPi_output, .nDownsample = 0)
 
 #### Clustering ####
-# clustering all-4 species per experiment, with number of clusters decided in previous section
-
 # change for different parameter values we'll use
 # var_thresh <- 1
 var_thresh <- 3
@@ -489,7 +496,7 @@ var_thresh <- 3
 
 clusterdf_list <- vector(mode = "list", length = 0)
 nclust_lookup <- tibble(experiment = c("HAP4", "LowPi", "CC", "LowN", "Cold", "Heat"),
-                        nclust = c(2, 2, 2, 2, 2, 2))
+                        nclust = 2)
 nclust_lookup
 for (e in nclust_lookup$experiment) {
   nclust <- nclust_lookup |> filter(experiment == e) |> 
@@ -507,8 +514,8 @@ getClusterCombination <- function(.clust_list) {
   for (nm in names(.clust_list)) {
     e <- gsub("_.*", "", nm)
     nclust <- gsub(".*_", "", nm)
-    cat("working on", paste(e, nclust, sep = "_"), "\n")
-    e_clust <- clusterdf_list[[paste(e, nclust, sep = "_")]]$df |> 
+    cat("working on", e, nclust, "\n")
+    e_clust <- .clust_list[[paste(e, nclust, sep = "_")]]$df |> 
       select(label, gene_name) |> 
       unique()
     e_clust$gene_ID <- map(e_clust$gene_name, \(.g) {
@@ -527,9 +534,45 @@ getClusterCombination <- function(.clust_list) {
 }
 clusterdf <- getClusterCombination(clusterdf_list)
 
+### QC: also clustering by 3 or 4 clusters to compare results
+# 3 clusters
+clusterdf_list3 <- vector(mode = "list", length = 0)
+nclust_lookup <- tibble(experiment = c("HAP4", "LowPi", "CC", "LowN", "Cold", "Heat"),
+                        nclust = 3)
+nclust_lookup
+for (e in nclust_lookup$experiment) {
+  nclust <- nclust_lookup |> filter(experiment == e) |> 
+    select(nclust) |> as.numeric()
+  cat("*********** working on", nclust, "clusters in", e, "*********** \n")
+  output <- clusterCountsList(counts_list[grepl(e, names(counts_list))], 
+                              .nClust = nclust, .tree_too = TRUE,
+                              .min_var = var_thresh)
+  clusterdf_list3[[paste(e, nclust, sep = "_")]] <- output
+}
+clusterdf3 <- getClusterCombination(clusterdf_list3)
+# 4 clusters
+clusterdf_list4 <- vector(mode = "list", length = 0)
+nclust_lookup <- tibble(experiment = c("HAP4", "LowPi", "CC", "LowN", "Cold", "Heat"),
+                        nclust = 4)
+nclust_lookup
+for (e in nclust_lookup$experiment) {
+  nclust <- nclust_lookup |> filter(experiment == e) |> 
+    select(nclust) |> as.numeric()
+  cat("*********** working on", nclust, "clusters in", e, "*********** \n")
+  output <- clusterCountsList(counts_list[grepl(e, names(counts_list))], 
+                              .nClust = nclust, .tree_too = TRUE,
+                              .min_var = var_thresh)
+  clusterdf_list4[[paste(e, nclust, sep = "_")]] <- output
+}
+clusterdf4 <- getClusterCombination(clusterdf_list4)
+QCclusterdf <- bind_rows(bind_cols(clusterdf, tibble(nclust = 2)),
+                         bind_cols(clusterdf3, tibble(nclust = 3)),
+                         bind_cols(clusterdf4, tibble(nclust = 4)))
 #### Saving ####
 # save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering1Disp.RData")
 save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering3Disp.RData")
+save(QCclusterdf, file = "data_files/QC_CorrelationClustering3Disp.RData")
+
 # save(clusterdf, clusterdf_list, file = "data_files/CorrelationClustering5Disp.RData")
 
 # ### Visualizing cluster expression patterns per experiment

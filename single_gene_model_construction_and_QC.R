@@ -1,6 +1,6 @@
 sapply(c("tidyr", "dplyr", "readr", "purrr", "ggplot2", "ggbeeswarm"), require, character.only=TRUE)
 library(MASS, include.only = "glm.nb")
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025/")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/aligning_the_molecular_phenotype/Redhuis2025/")
 source("functions_for_figure_scripts.R")
 load("data_files/GLM_Counts.RData")
 ExperimentNames <- c("CC", "HAP4", "LowN", "LowPi", "Heat", "Cold")

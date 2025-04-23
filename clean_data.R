@@ -1,5 +1,5 @@
 sapply(c("dplyr", "readr", "tidyr", "purrr", "ggplot2", "openxlsx", "matrixStats"), require, character.only=TRUE)
-setwd("/Users/annar/Documents/Wittkopp_Lab/networks/DDivergence/Redhuis2025")
+setwd("/Users/annar/Documents/Wittkopp_Lab/networks/aligning_the_molecular_phenotype/Redhuis2025/")
 
 #### Checking alignment stats ####
 # tagseq
@@ -727,6 +727,14 @@ sample_info |> filter(experiment == "LowN" & organism == "par" &
 
 #### misc filtering of additional samples and genes ####
 
+# Removeing Cell Cycle timepoints after HU shock b/c Scer and Spar don't
+# have the same periodicity of their cell cycles
+sample_info |> filter(experiment == "CC") |> 
+  select(time_point_str, time_point_num) |> unique() |> arrange(time_point_num)
+keep <- !(sample_info$experiment == "CC" & sample_info$time_point_num > 125)
+sample_info <- sample_info[keep,]
+counts <- counts[,(colnames(counts) %in% sample_info$sample_name)]
+
 # Whittling LowPi to just WT --- not enough of them to warrant the complication of including a second genotype (plus they're only present in -5 and 180 min samples)
 sample_info %>% filter(experiment == "LowPi") %>% select(genotype) %>% table()
 # species
@@ -776,11 +784,11 @@ ggplot(plotdf, aes(x = cer, y = par)) +
 # (the samples within the blue box will be removed by our library size threshold below)
 # and no other samples should be below the blue lines but not within the blue box
 hyblib_biased_samples <- c("WT_10_hyc_CellCycle_rep1",
-                           "WT_10_hyp_CellCycle_rep1")
-colSums(counts[,hyblib_biased_samples])
-# removing
-sample_info <- filter(sample_info, !(sample_name %in% hyblib_biased_samples))
-counts <- counts[,colnames(counts) %in% sample_info$sample_name]
+                           "WT_10_hyp_CellCycle_rep1") # not an issue once we removed CC samples past TP8
+# colSums(counts[,hyblib_biased_samples])
+# # removing
+# sample_info <- filter(sample_info, !(sample_name %in% hyblib_biased_samples))
+# counts <- counts[,colnames(counts) %in% sample_info$sample_name]
 
 # generating log2-cpm counts
 avgLibSizeInMillions <- mean(libsizes)/1e6
